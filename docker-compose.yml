@@ -1,3 +1,5 @@
+name: crime-scope-nyc
+
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.8

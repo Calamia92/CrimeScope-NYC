@@ -2,6 +2,26 @@
 .idea/
 *.iml
 
+# Dependencies
+node_modules/
+
+# SvelteKit
+.svelte-kit/
+build/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
 # OS files
 .DS_Store
 Thumbs.db
