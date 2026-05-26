@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# SvelteKit
+.svelte-kit/
+build/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# OS and IDE
+.DS_Store
+Thumbs.db
+.idea/
+*.iml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/

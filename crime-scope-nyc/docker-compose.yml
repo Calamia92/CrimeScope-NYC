@@ -1,0 +1,79 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: crimescope-clickhouse
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DATABASE:-crimescope}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-crimescope}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-crimescope_password}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "${CLICKHOUSE_HTTP_PORT:-8123}:8123"
+      - "${CLICKHOUSE_NATIVE_PORT:-9000}:9000"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "clickhouse-client --user $$CLICKHOUSE_USER --password $$CLICKHOUSE_PASSWORD --query 'SELECT 1'"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./apps/api
+    container_name: crimescope-api
+    environment:
+      API_PORT: 3000
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_HTTP_PORT: 8123
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-crimescope}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-crimescope}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-crimescope_password}
+    ports:
+      - "${API_PORT:-3000}:3000"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./apps/web
+    container_name: crimescope-web
+    environment:
+      PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:3000}
+    ports:
+      - "${WEB_PORT:-5173}:5173"
+    depends_on:
+      - api
+
+  ingest:
+    build:
+      context: ./packages/ingest
+    container_name: crimescope-ingest
+    profiles:
+      - ingest
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_HTTP_PORT: 8123
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-crimescope}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-crimescope}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-crimescope_password}
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
+  chronos:
+    build:
+      context: ./services/chronos
+    container_name: crimescope-chronos
+    environment:
+      CHRONOS_PORT: 8000
+    ports:
+      - "${CHRONOS_PORT:-8000}:8000"
+
+volumes:
+  clickhouse-data:
