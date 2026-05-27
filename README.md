@@ -45,15 +45,23 @@ The first run downloads images and installs dependencies inside Docker container
 - ClickHouse native TCP: localhost:9000
 - Chronos placeholder: http://localhost:8000
 
-## Run The Ingest Placeholder
+## Run The Ingest Sample
 
-The ingest service is optional and runs under the `ingest` Compose profile:
+The ingest service runs under the `ingest` Compose profile and loads a small sample into ClickHouse:
 
 ```bash
 docker compose --profile ingest run --rm ingest
 ```
 
-For now it only prints a placeholder message. NYC Open Data ingestion logic will be added later in `packages/ingest`.
+The job reads `packages/ingest/sample/sample.json`, normalizes the records to the initial raw schema, and inserts them into `crimescope.raw_nypd_complaints`.
+
+You do not need Bun, Python, or ClickHouse installed locally. Docker builds and runs the ingest container, and the ClickHouse service is reached over the Compose network.
+
+If you want to inspect the inserted rows after the job completes:
+
+```bash
+docker compose exec clickhouse clickhouse-client --user crimescope --password crimescope_password --query "SELECT complaint_number, borough, offense_category FROM crimescope.raw_nypd_complaints ORDER BY complaint_start_date;"
+```
 
 ## Environment
 
