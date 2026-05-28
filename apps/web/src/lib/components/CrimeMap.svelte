@@ -184,7 +184,7 @@
   {#if status === "loading"}
     <div class="overlay top-left loading">
       <div class="spinner"></div>
-      <span>Loading H3 cells from API…</span>
+      <span>Loading H3 cells from API...</span>
     </div>
   {:else if status === "error"}
     <div class="overlay top-left error">
@@ -217,7 +217,7 @@
               {#if i === STOPS.length - 1}
                 {threshold}+
               {:else}
-                {threshold}–{STOPS[i + 1][0] - 1}
+                {threshold}-{STOPS[i + 1][0] - 1}
               {/if}
             </div>
           </div>
