@@ -45,23 +45,86 @@ The first run downloads images and installs dependencies inside Docker container
 - ClickHouse native TCP: localhost:9000
 - Chronos placeholder: http://localhost:8000
 
-## Run The Ingest Sample
+## Run The Ingestion
 
-The ingest service runs under the `ingest` Compose profile and loads a small sample into ClickHouse:
+The ingest service runs under the `ingest` Compose profile. It supports two modes (selected via the `INGEST_MODE` environment variable):
+
+- `socrata` (default) - fetches live NYPD complaint records from the [NYC Open Data Socrata API](https://dev.socrata.com/foundry/data.cityofnewyork.us/qgea-i56i) (`qgea-i56i` dataset), normalizes them, computes H3 cells, and inserts into ClickHouse.
+- `sample` - reads the small bundled `packages/ingest/sample/sample.json` file. Useful for offline runs and quick smoke tests.
+
+Run the default Open Data ingestion (5 000 most recent records with coordinates):
 
 ```bash
 docker compose --profile ingest run --rm ingest
 ```
 
-The job reads `packages/ingest/sample/sample.json`, normalizes the records to the initial raw schema, and inserts them into `crimescope.raw_nypd_complaints`.
+Tune the volume or switch modes via env vars:
+
+```bash
+# Larger pull from NYC Open Data
+docker compose --profile ingest run --rm -e INGEST_LIMIT=20000 ingest
+
+# Offline sample-only run
+docker compose --profile ingest run --rm -e INGEST_MODE=sample ingest
+```
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `INGEST_MODE` | `socrata` | `socrata` (live API) or `sample` (bundled JSON) |
+| `INGEST_LIMIT` | `5000` | Max rows pulled per Socrata run (capped at 50 000 without an app token) |
+| `INGEST_BATCH_SIZE` | `1000` | Rows per `INSERT JSONEachRow` request |
+| `NYPD_SOCRATA_ENDPOINT` | `https://data.cityofnewyork.us/resource/qgea-i56i.json` | Override only to point at a different Socrata resource |
+| `SOCRATA_APP_TOKEN` | _(empty)_ | Optional Socrata app token to bypass the throttling for anonymous calls |
+
+The job is idempotent per dataset: each run starts by a synchronous `ALTER TABLE ... DELETE WHERE source_dataset = '<dataset>'`, where `<dataset>` is either `sample` or `qgea-i56i`, so rerunning does not duplicate rows.
 
 You do not need Bun, Python, or ClickHouse installed locally. Docker builds and runs the ingest container, and the ClickHouse service is reached over the Compose network.
 
-If you want to inspect the inserted rows after the job completes:
+Inspect the inserted rows after the job completes:
 
 ```bash
-docker compose exec clickhouse clickhouse-client --user crimescope --password crimescope_password --query "SELECT complaint_number, borough, offense_category FROM crimescope.raw_nypd_complaints ORDER BY complaint_start_date;"
+docker compose exec clickhouse clickhouse-client --user crimescope --password crimescope_password --query \
+  "SELECT source_dataset, count() FROM crimescope.raw_nypd_complaints GROUP BY source_dataset"
 ```
+
+## H3 Geospatial Aggregation
+
+Records are indexed with [H3](https://h3geo.org/) hexagonal cells during ingestion at two resolutions:
+
+- **Resolution 9** (`h3_res_9`, ~0.1 km2 / ~150 m edges) - neighborhood/block granularity, the primary resolution for the main map heatmap.
+- **Resolution 7** (`h3_res_7`, ~5 km2 / ~1.2 km edges) - borough-level overview, useful when zoomed out.
+
+Both columns are stored as `Nullable(UInt64)` in ClickHouse (the native H3 cell representation). Records without coordinates leave them `NULL`, which the aggregation endpoint filters out automatically.
+
+### Aggregation endpoint
+
+```
+GET /aggregations/h3?resolution=9&from=YYYY-MM-DD&to=YYYY-MM-DD&borough=BROOKLYN&offense=ROBBERY
+```
+
+Query parameters (all optional except `resolution`, which defaults to 9):
+
+| Param | Type | Notes |
+|---|---|---|
+| `resolution` | `7` or `9` | H3 resolution; other values return HTTP 400 |
+| `from` / `to` | `YYYY-MM-DD` | Inclusive bounds on `complaint_start_date` |
+| `borough` | string | Matched exactly against `borough` (uppercased server-side) |
+| `offense` | string | Substring match (ILIKE) against `offense_description` |
+
+Response shape (truncated):
+
+```json
+{
+  "resolution": 9,
+  "filters": { "borough": "BROOKLYN" },
+  "cellCount": 1234,
+  "cells": [
+    { "h3": "892a1072603ffff", "count": 42, "lat": 40.6782, "lng": -73.9442 }
+  ]
+}
+```
+
+Cells are sorted by descending count and capped at 5 000 per response.
 
 ## ClickHouse Schema
 
