@@ -207,7 +207,7 @@ async function fetchSocrata(): Promise<CrimeRow[]> {
 }
 
 async function deleteWhereDataset(dataset: string): Promise<void> {
-	const query = `ALTER TABLE ${CLICKHOUSE_DATABASE}.raw_nypd_complaints DELETE WHERE source_dataset = '${dataset.replace(/'/g, "''")}'`;
+	const query = `ALTER TABLE ${CLICKHOUSE_DATABASE}.raw_nypd_complaints DELETE WHERE source_dataset = '${dataset.replace(/'/g, "''")}' SETTINGS mutations_sync = 1`;
 	const res = await fetch(clickhouseUrl(query), { method: "POST" });
 	if (!res.ok) {
 		const txt = await res.text();
@@ -233,6 +233,15 @@ async function main(): Promise<void> {
 	console.log(
 		`[ingest] mode=${MODE} target=${CLICKHOUSE_HOST}:${CLICKHOUSE_PORT}/${CLICKHOUSE_DATABASE}`
 	);
+
+	if (!Number.isInteger(LIMIT) || LIMIT <= 0) {
+		throw new Error(`Invalid INGEST_LIMIT '${process.env.INGEST_LIMIT}'. Expected a positive integer.`);
+	}
+	if (!Number.isInteger(BATCH_SIZE) || BATCH_SIZE <= 0) {
+		throw new Error(
+			`Invalid INGEST_BATCH_SIZE '${process.env.INGEST_BATCH_SIZE}'. Expected a positive integer.`
+		);
+	}
 
 	let rows: CrimeRow[];
 	let dataset: string;

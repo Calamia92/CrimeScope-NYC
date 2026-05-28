@@ -49,8 +49,8 @@ The first run downloads images and installs dependencies inside Docker container
 
 The ingest service runs under the `ingest` Compose profile. It supports two modes (selected via the `INGEST_MODE` environment variable):
 
-- `socrata` (default) — fetches live NYPD complaint records from the [NYC Open Data Socrata API](https://dev.socrata.com/foundry/data.cityofnewyork.us/qgea-i56i) (`qgea-i56i` dataset), normalizes them, computes H3 cells, and inserts into ClickHouse.
-- `sample` — reads the small bundled `packages/ingest/sample/sample.json` file. Useful for offline runs and quick smoke tests.
+- `socrata` (default) - fetches live NYPD complaint records from the [NYC Open Data Socrata API](https://dev.socrata.com/foundry/data.cityofnewyork.us/qgea-i56i) (`qgea-i56i` dataset), normalizes them, computes H3 cells, and inserts into ClickHouse.
+- `sample` - reads the small bundled `packages/ingest/sample/sample.json` file. Useful for offline runs and quick smoke tests.
 
 Run the default Open Data ingestion (5 000 most recent records with coordinates):
 
@@ -76,7 +76,7 @@ docker compose --profile ingest run --rm -e INGEST_MODE=sample ingest
 | `NYPD_SOCRATA_ENDPOINT` | `https://data.cityofnewyork.us/resource/qgea-i56i.json` | Override only to point at a different Socrata resource |
 | `SOCRATA_APP_TOKEN` | _(empty)_ | Optional Socrata app token to bypass the throttling for anonymous calls |
 
-The job is idempotent per dataset: each run starts by `ALTER TABLE ... DELETE WHERE source_dataset = '<dataset>'`, where `<dataset>` is either `sample` or `qgea-i56i`, so rerunning never duplicates rows.
+The job is idempotent per dataset: each run starts by a synchronous `ALTER TABLE ... DELETE WHERE source_dataset = '<dataset>'`, where `<dataset>` is either `sample` or `qgea-i56i`, so rerunning does not duplicate rows.
 
 You do not need Bun, Python, or ClickHouse installed locally. Docker builds and runs the ingest container, and the ClickHouse service is reached over the Compose network.
 
@@ -91,8 +91,8 @@ docker compose exec clickhouse clickhouse-client --user crimescope --password cr
 
 Records are indexed with [H3](https://h3geo.org/) hexagonal cells during ingestion at two resolutions:
 
-- **Resolution 9** (`h3_res_9`, ~0.1 km² / ~150 m edges) — neighborhood/block granularity, the primary resolution for the main map heatmap.
-- **Resolution 7** (`h3_res_7`, ~5 km² / ~1.2 km edges) — borough-level overview, useful when zoomed out.
+- **Resolution 9** (`h3_res_9`, ~0.1 km2 / ~150 m edges) - neighborhood/block granularity, the primary resolution for the main map heatmap.
+- **Resolution 7** (`h3_res_7`, ~5 km2 / ~1.2 km edges) - borough-level overview, useful when zoomed out.
 
 Both columns are stored as `Nullable(UInt64)` in ClickHouse (the native H3 cell representation). Records without coordinates leave them `NULL`, which the aggregation endpoint filters out automatically.
 
