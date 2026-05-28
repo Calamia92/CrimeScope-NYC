@@ -1,4 +1,6 @@
 <script lang="ts">
+  import CrimeMap from "$lib/components/CrimeMap.svelte";
+
   const apiBaseUrl = import.meta.env.PUBLIC_API_BASE_URL ?? "http://localhost:3000";
 </script>
 
@@ -20,6 +22,14 @@
     </p>
   </section>
 
+  <section class="map-section" aria-label="Crime density map">
+    <header class="section-header">
+      <h2>Crime density (H3 resolution 9)</h2>
+      <p>Live NYC Open Data, aggregated server-side and rendered with MapLibre GL JS.</p>
+    </header>
+    <CrimeMap {apiBaseUrl} />
+  </section>
+
   <section class="status-grid" aria-label="Service links">
     <a href={`${apiBaseUrl}/health`} target="_blank" rel="noreferrer">
       <span>API</span>
@@ -28,6 +38,10 @@
     <a href={`${apiBaseUrl}/db-health`} target="_blank" rel="noreferrer">
       <span>ClickHouse</span>
       <strong>/db-health</strong>
+    </a>
+    <a href={`${apiBaseUrl}/aggregations/h3?resolution=9`} target="_blank" rel="noreferrer">
+      <span>API</span>
+      <strong>/aggregations/h3</strong>
     </a>
   </section>
 </main>
@@ -45,9 +59,9 @@
   .shell {
     min-height: 100vh;
     display: grid;
-    align-content: center;
-    gap: 2rem;
-    max-width: 960px;
+    align-content: start;
+    gap: 2.5rem;
+    max-width: 1200px;
     margin: 0 auto;
     padding: 3rem 1.5rem;
   }
@@ -78,6 +92,27 @@
     color: #4d5b65;
     font-size: 1.125rem;
     line-height: 1.6;
+  }
+
+  .map-section {
+    display: grid;
+    gap: 1rem;
+  }
+
+  .section-header {
+    display: grid;
+    gap: 0.25rem;
+  }
+
+  .section-header h2 {
+    margin: 0;
+    font-size: 1.5rem;
+  }
+
+  .section-header p {
+    margin: 0;
+    color: #4d5b65;
+    font-size: 0.95rem;
   }
 
   .status-grid {

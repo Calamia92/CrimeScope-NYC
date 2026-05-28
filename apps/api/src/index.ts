@@ -1,4 +1,5 @@
 import { createClient } from "@clickhouse/client";
+import { cors } from "@elysiajs/cors";
 import { Elysia } from "elysia";
 import { cellToLatLng } from "h3-js";
 
@@ -28,6 +29,7 @@ const MAX_CELLS = 5000;
 type H3AggregationRow = { cell: string; count: string };
 
 const app = new Elysia()
+  .use(cors())
   .get("/health", () => ({ status: "ok" }))
   .get("/db-health", async ({ set }) => {
     try {
