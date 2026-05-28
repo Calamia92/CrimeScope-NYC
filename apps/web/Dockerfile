@@ -7,6 +7,7 @@ RUN bun install
 
 COPY svelte.config.js tsconfig.json vite.config.ts ./
 COPY src ./src
+RUN bunx svelte-kit sync
 
 EXPOSE 5173
 
