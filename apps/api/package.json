@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "@clickhouse/client": "^1.12.1",
-    "elysia": "^1.2.10"
+    "elysia": "^1.2.10",
+    "h3-js": "^4.1.0"
   },
   "devDependencies": {
     "bun-types": "^1.1.42",
