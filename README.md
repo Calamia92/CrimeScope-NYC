@@ -55,6 +55,20 @@ docker compose --profile ingest run --rm ingest
 
 For now it only prints a placeholder message. NYC Open Data ingestion logic will be added later in `packages/ingest`.
 
+## ClickHouse Schema
+
+The first raw table lives in [`clickhouse/init/001_create_raw_nypd_complaints.sql`](clickhouse/init/001_create_raw_nypd_complaints.sql).
+
+On a fresh ClickHouse volume, Docker will execute the SQL automatically because the `clickhouse` service mounts `clickhouse/init` into `/docker-entrypoint-initdb.d`.
+
+If the container is already running and you want to apply the schema manually, run:
+
+```bash
+docker compose exec clickhouse sh -c "clickhouse-client --user crimescope --password crimescope_password --multiquery < /docker-entrypoint-initdb.d/001_create_raw_nypd_complaints.sql"
+```
+
+The table keeps room for later H3 and analytics work with nullable H3 fields, source metadata, and the raw complaint dimensions needed for filtering and aggregation.
+
 ## Environment
 
 Copy `.env.example` to `.env` if you want to override ports or ClickHouse credentials:
