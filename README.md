@@ -52,7 +52,7 @@ The ingest service runs under the `ingest` Compose profile. It supports two mode
 - `socrata` (default) - fetches live NYPD complaint records from the [NYC Open Data Socrata API](https://dev.socrata.com/foundry/data.cityofnewyork.us/qgea-i56i) (`qgea-i56i` dataset), normalizes them, computes H3 cells, and inserts into ClickHouse.
 - `sample` - reads the small bundled `packages/ingest/sample/sample.json` file. Useful for offline runs and quick smoke tests.
 
-Run the default Open Data ingestion (5 000 most recent records with coordinates):
+Run the default Open Data ingestion (50 000 most recent records with coordinates):
 
 ```bash
 docker compose --profile ingest run --rm ingest
@@ -71,7 +71,7 @@ docker compose --profile ingest run --rm -e INGEST_MODE=sample ingest
 | Variable | Default | Purpose |
 |---|---|---|
 | `INGEST_MODE` | `socrata` | `socrata` (live API) or `sample` (bundled JSON) |
-| `INGEST_LIMIT` | `5000` | Max rows pulled per Socrata run (capped at 50 000 without an app token) |
+| `INGEST_LIMIT` | `50000` | Max rows pulled per Socrata run (capped at 50 000 without an app token) |
 | `INGEST_BATCH_SIZE` | `1000` | Rows per `INSERT JSONEachRow` request |
 | `NYPD_SOCRATA_ENDPOINT` | `https://data.cityofnewyork.us/resource/qgea-i56i.json` | Override only to point at a different Socrata resource |
 | `SOCRATA_APP_TOKEN` | _(empty)_ | Optional Socrata app token to bypass the throttling for anonymous calls |

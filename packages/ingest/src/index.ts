@@ -2,8 +2,9 @@ import { readFileSync } from "fs";
 import { latLngToCell } from "h3-js";
 
 const MODE = (process.env.INGEST_MODE ?? "socrata").toLowerCase();
-const LIMIT = Number(process.env.INGEST_LIMIT ?? 5000);
+const LIMIT = Number(process.env.INGEST_LIMIT ?? 50000);
 const BATCH_SIZE = Number(process.env.INGEST_BATCH_SIZE ?? 1000);
+const SOCRATA_PAGE_SIZE = 50000;
 const SOCRATA_ENDPOINT =
 	process.env.NYPD_SOCRATA_ENDPOINT ??
 	"https://data.cityofnewyork.us/resource/qgea-i56i.json";
@@ -176,16 +177,16 @@ async function loadSample(): Promise<CrimeRow[]> {
 	return raw.map(enrichSampleRow);
 }
 
-async function fetchSocrata(): Promise<CrimeRow[]> {
+async function fetchSocrataPage(pageLimit: number, offset: number): Promise<SocrataRecord[]> {
 	const url = new URL(SOCRATA_ENDPOINT);
-	url.searchParams.set("$limit", String(LIMIT));
+	url.searchParams.set("$limit", String(pageLimit));
+	url.searchParams.set("$offset", String(offset));
 	url.searchParams.set(
 		"$where",
 		"latitude IS NOT NULL AND longitude IS NOT NULL AND cmplnt_fr_dt IS NOT NULL"
 	);
 	url.searchParams.set("$order", "cmplnt_fr_dt DESC");
 
-	console.log(`[ingest] fetching up to ${LIMIT} records from ${url.host}...`);
 	const headers: Record<string, string> = {};
 	if (SOCRATA_APP_TOKEN) headers["X-App-Token"] = SOCRATA_APP_TOKEN;
 
@@ -193,8 +194,30 @@ async function fetchSocrata(): Promise<CrimeRow[]> {
 	if (!res.ok) {
 		throw new Error(`Socrata returned ${res.status} ${res.statusText}: ${await res.text()}`);
 	}
-	const raw = (await res.json()) as SocrataRecord[];
-	console.log(`[ingest] received ${raw.length} raw records from NYC Open Data.`);
+	return (await res.json()) as SocrataRecord[];
+}
+
+async function fetchSocrata(): Promise<CrimeRow[]> {
+	const target = LIMIT;
+	const raw: SocrataRecord[] = [];
+	let offset = 0;
+	let page = 0;
+
+	console.log(`[ingest] fetching up to ${target} records from NYC Open Data...`);
+	while (raw.length < target) {
+		const pageLimit = Math.min(SOCRATA_PAGE_SIZE, target - raw.length);
+		page += 1;
+		console.log(`[ingest] page ${page}: limit=${pageLimit} offset=${offset}`);
+		const records = await fetchSocrataPage(pageLimit, offset);
+		raw.push(...records);
+		if (records.length < pageLimit) {
+			console.log(`[ingest] reached end of dataset (${raw.length} records).`);
+			break;
+		}
+		offset += pageLimit;
+	}
+
+	console.log(`[ingest] received ${raw.length} raw records across ${page} page(s).`);
 
 	const mapped: CrimeRow[] = [];
 	for (const r of raw) {

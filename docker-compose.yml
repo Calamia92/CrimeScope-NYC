@@ -66,7 +66,7 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-crimescope}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-crimescope_password}
       INGEST_MODE: ${INGEST_MODE:-socrata}
-      INGEST_LIMIT: ${INGEST_LIMIT:-5000}
+      INGEST_LIMIT: ${INGEST_LIMIT:-50000}
       INGEST_BATCH_SIZE: ${INGEST_BATCH_SIZE:-1000}
       NYPD_SOCRATA_ENDPOINT: ${NYPD_SOCRATA_ENDPOINT:-https://data.cityofnewyork.us/resource/qgea-i56i.json}
       SOCRATA_APP_TOKEN: ${SOCRATA_APP_TOKEN:-}

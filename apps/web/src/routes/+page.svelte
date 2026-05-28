@@ -1,5 +1,9 @@
 <script lang="ts">
+  import CategoryChart from "$lib/components/CategoryChart.svelte";
   import CrimeMap from "$lib/components/CrimeMap.svelte";
+  import HourChart from "$lib/components/HourChart.svelte";
+  import TimeSeriesChart from "$lib/components/TimeSeriesChart.svelte";
+  import WeekdayChart from "$lib/components/WeekdayChart.svelte";
 
   const apiBaseUrl = import.meta.env.PUBLIC_API_BASE_URL ?? "http://localhost:3000";
 </script>
@@ -30,6 +34,42 @@
     <CrimeMap {apiBaseUrl} />
   </section>
 
+  <section class="analytics-section" aria-label="Analytics">
+    <header class="section-header">
+      <h2>Analytics</h2>
+      <p>Aggregated views of the ingested complaints, powered by Vega-Lite.</p>
+    </header>
+    <div class="charts-grid">
+      <div class="charts-wide">
+        <TimeSeriesChart
+          {apiBaseUrl}
+          granularity="day"
+          title="Complaints per day"
+        />
+      </div>
+      <HourChart {apiBaseUrl} />
+      <WeekdayChart {apiBaseUrl} />
+      <CategoryChart
+        {apiBaseUrl}
+        dimension="offense_category"
+        limit={10}
+        title="Top offense categories"
+      />
+      <CategoryChart
+        {apiBaseUrl}
+        dimension="borough"
+        limit={5}
+        title="Complaints by borough"
+      />
+      <CategoryChart
+        {apiBaseUrl}
+        dimension="law_category"
+        limit={5}
+        title="Severity (law category)"
+      />
+    </div>
+  </section>
+
   <section class="status-grid" aria-label="Service links">
     <a href={`${apiBaseUrl}/health`} target="_blank" rel="noreferrer">
       <span>API</span>
@@ -42,6 +82,14 @@
     <a href={`${apiBaseUrl}/aggregations/h3?resolution=9`} target="_blank" rel="noreferrer">
       <span>API</span>
       <strong>/aggregations/h3</strong>
+    </a>
+    <a href={`${apiBaseUrl}/analytics/by-date?granularity=month`} target="_blank" rel="noreferrer">
+      <span>API</span>
+      <strong>/analytics/by-date</strong>
+    </a>
+    <a href={`${apiBaseUrl}/analytics/by-category?dimension=offense_category`} target="_blank" rel="noreferrer">
+      <span>API</span>
+      <strong>/analytics/by-category</strong>
     </a>
   </section>
 </main>
@@ -94,7 +142,8 @@
     line-height: 1.6;
   }
 
-  .map-section {
+  .map-section,
+  .analytics-section {
     display: grid;
     gap: 1rem;
   }
@@ -113,6 +162,16 @@
     margin: 0;
     color: #4d5b65;
     font-size: 0.95rem;
+  }
+
+  .charts-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    gap: 1.25rem;
+  }
+
+  .charts-wide {
+    grid-column: 1 / -1;
   }
 
   .status-grid {
