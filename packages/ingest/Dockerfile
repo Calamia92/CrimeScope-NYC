@@ -7,5 +7,6 @@ RUN bun install
 
 COPY tsconfig.json ./
 COPY src ./src
+COPY sample ./sample
 
 CMD ["bun", "run", "start"]
