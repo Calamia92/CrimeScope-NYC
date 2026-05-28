@@ -64,7 +64,7 @@ On a fresh ClickHouse volume, Docker will execute the SQL automatically because 
 If the container is already running and you want to apply the schema manually, run:
 
 ```bash
-docker compose exec clickhouse clickhouse-client --user crimescope --password crimescope_password --multiquery < /docker-entrypoint-initdb.d/001_create_raw_nypd_complaints.sql
+docker compose exec clickhouse sh -c "clickhouse-client --user crimescope --password crimescope_password --multiquery < /docker-entrypoint-initdb.d/001_create_raw_nypd_complaints.sql"
 ```
 
 The table keeps room for later H3 and analytics work with nullable H3 fields, source metadata, and the raw complaint dimensions needed for filtering and aggregation.
