@@ -6,6 +6,28 @@
   import TimeSeriesChart from "$lib/components/TimeSeriesChart.svelte";
   import WeekdayChart from "$lib/components/WeekdayChart.svelte";
 
+  type CrimeRecord = {
+    complaint_number: string;
+    complaint_start_date: string;
+    complaint_start_time: string | null;
+    offense_category: string;
+    borough: string | null;
+    precinct: number | null;
+  };
+
+  type CrimeRecordsResponse = {
+    total: number;
+    items: CrimeRecord[];
+  };
+
+  type CategoryResponse = {
+    totals: Array<{ key: string; count: number }>;
+  };
+
+  type ByDateResponse = {
+    buckets: Array<{ bucket: string; count: number }>;
+  };
+
   const apiBaseUrl = env.PUBLIC_API_BASE_URL ?? "http://localhost:3000";
 
   const boroughOptions = [
@@ -21,6 +43,16 @@
   let dateTo = $state("");
   let borough = $state("");
   let offenseCategory = $state("");
+  let overviewStatus: "loading" | "ready" | "empty" | "error" = $state("loading");
+  let overviewError = $state("");
+  let totalComplaints = $state(0);
+  let topBorough = $state("No data");
+  let topBoroughCount = $state(0);
+  let topCategory = $state("No data");
+  let topCategoryCount = $state(0);
+  let coveredPeriod = $state("No data");
+  let recentRecords = $state<CrimeRecord[]>([]);
+  let overviewRequestId = 0;
 
   function buildCrimeRecordsUrl(): string {
     const url = new URL("/crime-records", apiBaseUrl);
@@ -47,12 +79,68 @@
     return url.toString();
   }
 
+  async function fetchJson<T>(url: string): Promise<T> {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return (await res.json()) as T;
+  }
+
+  function formatPeriod(buckets: ByDateResponse["buckets"]): string {
+    if (buckets.length === 0) return "No data";
+    const first = buckets[0]?.bucket.slice(0, 10);
+    const last = buckets[buckets.length - 1]?.bucket.slice(0, 10);
+    return first === last ? first : `${first} to ${last}`;
+  }
+
+  async function loadOverview(filterSignature: string): Promise<void> {
+    const requestId = ++overviewRequestId;
+    overviewStatus = "loading";
+    overviewError = "";
+
+    try {
+      const recordsUrl = new URL(buildCrimeRecordsUrl());
+      recordsUrl.searchParams.set("page", "1");
+      recordsUrl.searchParams.set("pageSize", "10");
+
+      const boroughUrl = buildAnalyticsUrl("/analytics/by-category?dimension=borough&limit=1");
+      const categoryUrl = buildAnalyticsUrl("/analytics/by-category?dimension=offense_category&limit=1");
+      const periodUrl = buildAnalyticsUrl("/analytics/by-date?granularity=month");
+
+      const [records, boroughs, categories, dates] = await Promise.all([
+        fetchJson<CrimeRecordsResponse>(recordsUrl.toString()),
+        fetchJson<CategoryResponse>(boroughUrl),
+        fetchJson<CategoryResponse>(categoryUrl),
+        fetchJson<ByDateResponse>(periodUrl)
+      ]);
+
+      if (requestId !== overviewRequestId || filterSignature !== buildAnalyticsFilterQuery()) return;
+
+      totalComplaints = records.total;
+      recentRecords = records.items;
+      topBorough = boroughs.totals[0]?.key ?? "No data";
+      topBoroughCount = boroughs.totals[0]?.count ?? 0;
+      topCategory = categories.totals[0]?.key ?? "No data";
+      topCategoryCount = categories.totals[0]?.count ?? 0;
+      coveredPeriod = formatPeriod(dates.buckets);
+      overviewStatus = totalComplaints === 0 ? "empty" : "ready";
+    } catch (error) {
+      if (requestId !== overviewRequestId) return;
+      overviewStatus = "error";
+      overviewError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
   const clearFilters = () => {
     dateFrom = "";
     dateTo = "";
     borough = "";
     offenseCategory = "";
   };
+
+  $effect(() => {
+    const signature = buildAnalyticsFilterQuery();
+    void loadOverview(signature);
+  });
 </script>
 
 <svelte:head>
@@ -153,12 +241,105 @@
     </aside>
 
     <div class="content-stack">
+      <section class="overview-panel" aria-label="Dashboard overview">
+        <div class="kpi-grid">
+          <article class="kpi-card accent-total">
+            <span>Total complaints</span>
+            <strong>{overviewStatus === "loading" ? "..." : totalComplaints.toLocaleString()}</strong>
+            <small>Current filter scope</small>
+          </article>
+
+          <article class="kpi-card">
+            <span>Top borough</span>
+            <strong>{overviewStatus === "loading" ? "..." : topBorough}</strong>
+            <small>{topBoroughCount.toLocaleString()} complaints</small>
+          </article>
+
+          <article class="kpi-card">
+            <span>Top category</span>
+            <strong>{overviewStatus === "loading" ? "..." : topCategory}</strong>
+            <small>{topCategoryCount.toLocaleString()} complaints</small>
+          </article>
+
+          <article class="kpi-card">
+            <span>Period covered</span>
+            <strong>{overviewStatus === "loading" ? "..." : coveredPeriod}</strong>
+            <small>Grouped by month</small>
+          </article>
+        </div>
+
+        {#if overviewStatus === "empty"}
+          <div class="empty-banner">
+            <strong>No records found</strong>
+            <span>Run the ingest service or broaden the filters to populate the dashboard.</span>
+            <code>docker compose --profile ingest run --rm -e INGEST_MODE=socrata -e INGEST_LIMIT=500 ingest</code>
+          </div>
+        {:else if overviewStatus === "error"}
+          <div class="empty-banner error-banner">
+            <strong>Overview unavailable</strong>
+            <span>{overviewError}</span>
+          </div>
+        {/if}
+
+        <div class="pipeline-strip" aria-label="Data pipeline">
+          <span>NYC Open Data</span>
+          <span>Ingest</span>
+          <span>ClickHouse</span>
+          <span>Elysia API</span>
+          <span>SvelteKit Dashboard</span>
+        </div>
+      </section>
+
       <section class="map-panel" aria-label="Map">
         <header class="section-header">
           <h2>Map</h2>
           <p>Crime density aggregated server-side and rendered with MapLibre GL JS.</p>
         </header>
         <CrimeMap {apiBaseUrl} filterQuery={buildAnalyticsFilterQuery()} />
+      </section>
+
+      <section class="records-panel" aria-label="Recent crime records">
+        <header class="section-header records-header">
+          <div>
+            <h2>Recent records</h2>
+            <p>Latest complaints matching the current filters.</p>
+          </div>
+          <a href={buildCrimeRecordsUrl()} target="_blank" rel="noreferrer">Open full API result</a>
+        </header>
+
+        {#if overviewStatus === "loading"}
+          <div class="table-state">Loading records...</div>
+        {:else if recentRecords.length === 0}
+          <div class="table-state">No records to show.</div>
+        {:else}
+          <div class="records-table-wrap">
+            <table class="records-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Borough</th>
+                  <th>Category</th>
+                  <th>Precinct</th>
+                  <th>ID</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each recentRecords as record}
+                  <tr>
+                    <td>
+                      <strong>{record.complaint_start_date}</strong>
+                      <span>{record.complaint_start_time ?? "time unknown"}</span>
+                    </td>
+                    <td>{record.borough ?? "Unknown"}</td>
+                    <td>{record.offense_category}</td>
+                    <td>{record.precinct ?? "N/A"}</td>
+                    <td><code>{record.complaint_number}</code></td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
       </section>
 
       <section class="analytics-panel" aria-label="Analytics">
@@ -318,11 +499,13 @@
   }
 
   .filters-panel,
+  .overview-panel,
   .map-panel,
+  .records-panel,
   .analytics-panel {
     background: rgba(255, 255, 255, 0.92);
     border: 1px solid #d8e0e6;
-    border-radius: 18px;
+    border-radius: 8px;
     box-shadow: 0 14px 34px rgba(20, 33, 43, 0.08);
     overflow: hidden;
   }
@@ -430,7 +613,110 @@
     gap: 1.25rem;
   }
 
+  .overview-panel {
+    display: grid;
+    gap: 1rem;
+    padding: 1.2rem;
+  }
+
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.85rem;
+  }
+
+  .kpi-card {
+    display: grid;
+    gap: 0.35rem;
+    min-height: 112px;
+    padding: 1rem;
+    border: 1px solid #d8e0e6;
+    border-radius: 8px;
+    background: #fff;
+  }
+
+  .kpi-card span,
+  .kpi-card small {
+    color: #60717d;
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .kpi-card strong {
+    align-self: center;
+    color: #14212b;
+    font-size: 1.45rem;
+    line-height: 1.1;
+    overflow-wrap: anywhere;
+  }
+
+  .accent-total {
+    background: #14212b;
+    border-color: #14212b;
+  }
+
+  .accent-total span,
+  .accent-total small {
+    color: #b8c6cf;
+  }
+
+  .accent-total strong {
+    color: #fff;
+  }
+
+  .empty-banner {
+    display: grid;
+    gap: 0.35rem;
+    padding: 1rem;
+    border: 1px solid #f1c56b;
+    border-radius: 8px;
+    background: #fff8e5;
+    color: #5a4100;
+  }
+
+  .empty-banner span {
+    color: #6b5a27;
+  }
+
+  .empty-banner code {
+    display: block;
+    padding: 0.65rem;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.75);
+    color: #14212b;
+    font-size: 0.8rem;
+    overflow-x: auto;
+  }
+
+  .error-banner {
+    border-color: #f1a1a8;
+    background: #fff0f1;
+    color: #8f001a;
+  }
+
+  .pipeline-strip {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  .pipeline-strip span {
+    min-height: 2.2rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 0.55rem;
+    border-radius: 6px;
+    background: #eef6f7;
+    color: #005d68;
+    font-size: 0.78rem;
+    font-weight: 800;
+    text-align: center;
+  }
+
   .map-panel,
+  .records-panel,
   .analytics-panel {
     display: grid;
     gap: 1rem;
@@ -451,6 +737,78 @@
     grid-column: 1 / -1;
   }
 
+  .records-header {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .records-header a {
+    color: #006d77;
+    font-size: 0.9rem;
+    font-weight: 800;
+    text-decoration: none;
+  }
+
+  .records-table-wrap {
+    overflow-x: auto;
+    border: 1px solid #d8e0e6;
+    border-radius: 8px;
+  }
+
+  .records-table {
+    width: 100%;
+    min-width: 720px;
+    border-collapse: collapse;
+    background: #fff;
+  }
+
+  .records-table th,
+  .records-table td {
+    padding: 0.8rem 0.9rem;
+    border-bottom: 1px solid #eef1f4;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .records-table th {
+    color: #60717d;
+    font-size: 0.76rem;
+    text-transform: uppercase;
+  }
+
+  .records-table td {
+    color: #14212b;
+    font-size: 0.9rem;
+  }
+
+  .records-table td span {
+    display: block;
+    margin-top: 0.15rem;
+    color: #60717d;
+    font-size: 0.78rem;
+  }
+
+  .records-table code {
+    color: #4d5b65;
+    font-size: 0.78rem;
+  }
+
+  .records-table tr:last-child td {
+    border-bottom: 0;
+  }
+
+  .table-state {
+    display: grid;
+    place-items: center;
+    min-height: 140px;
+    border: 1px dashed #cfd8df;
+    border-radius: 8px;
+    color: #60717d;
+    background: #fff;
+  }
+
   @media (max-width: 1024px) {
     .dashboard-grid {
       grid-template-columns: 1fr;
@@ -458,6 +816,10 @@
 
     .filters-panel {
       position: static;
+    }
+
+    .kpi-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
 
@@ -474,6 +836,16 @@
 
     .filter-actions {
       grid-template-columns: 1fr;
+    }
+
+    .kpi-grid,
+    .pipeline-strip {
+      grid-template-columns: 1fr;
+    }
+
+    .records-header {
+      align-items: start;
+      flex-direction: column;
     }
 
     .charts-grid {
