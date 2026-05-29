@@ -98,9 +98,25 @@ function parsePositiveInt(value: string | undefined, fallback: number, minimum: 
 
 function parseIsoDate(value: string | undefined, fieldName: string): { value?: string; error?: string } {
   if (typeof value !== "string" || value.length === 0) return {};
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) {
     return { error: `${fieldName} must use YYYY-MM-DD format.` };
   }
+
+  const [, yearText, monthText, dayText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    return { error: `${fieldName} must be a valid calendar date.` };
+  }
+
   return { value };
 }
 
