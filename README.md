@@ -165,6 +165,17 @@ The job is idempotent per dataset: each run starts by a synchronous `ALTER TABLE
 
 You do not need Bun, Python, or ClickHouse installed locally. Docker builds and runs the ingest container, and the ClickHouse service is reached over the Compose network.
 
+### Data quality checks
+
+Ingestion validates the minimum fields needed by the app before inserting into ClickHouse:
+
+- rows without a complaint number are skipped
+- rows without a valid `YYYY-MM-DD` complaint start date are skipped
+- rows without an offense category are imported with `UNKNOWN`
+- rows without valid latitude/longitude are imported without H3 cells
+
+Each run prints a data-quality summary with source, imported, skipped, and warning counts. Invalid records do not stop the full ingestion job.
+
 Inspect the inserted rows after the job completes:
 
 ```bash
