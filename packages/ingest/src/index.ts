@@ -64,6 +64,38 @@ type SocrataRecord = {
 	longitude?: string;
 };
 
+type DataQualitySummary = {
+	sourceRows: number;
+	importedRows: number;
+	skippedRows: number;
+	skippedReasons: Record<string, number>;
+	warnings: Record<string, number>;
+};
+
+function createQualitySummary(): DataQualitySummary {
+	return {
+		sourceRows: 0,
+		importedRows: 0,
+		skippedRows: 0,
+		skippedReasons: {},
+		warnings: {}
+	};
+}
+
+function countReason(target: Record<string, number>, reason: string): void {
+	target[reason] = (target[reason] ?? 0) + 1;
+}
+
+function skipRow(summary: DataQualitySummary, reason: string): null {
+	summary.skippedRows += 1;
+	countReason(summary.skippedReasons, reason);
+	return null;
+}
+
+function warnRow(summary: DataQualitySummary, reason: string): void {
+	countReason(summary.warnings, reason);
+}
+
 function clickhouseUrl(query: string): string {
 	const params = new URLSearchParams({
 		user: CLICKHOUSE_USER,
@@ -93,32 +125,77 @@ function toFloatOrNull(v: unknown): number | null {
 	return Number.isFinite(n) ? n : null;
 }
 
-function isoDateOnly(v: unknown): string | null {
-	if (typeof v !== "string" || v.length < 10) return null;
-	return v.slice(0, 10);
+function isValidCalendarDate(value: string): boolean {
+	const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+	if (!match) return false;
+	const [, yearText, monthText, dayText] = match;
+	const year = Number(yearText);
+	const month = Number(monthText);
+	const day = Number(dayText);
+	const parsed = new Date(Date.UTC(year, month - 1, day));
+	return (
+		parsed.getUTCFullYear() === year &&
+		parsed.getUTCMonth() === month - 1 &&
+		parsed.getUTCDate() === day
+	);
 }
 
-function socrataToCrimeRow(raw: SocrataRecord): CrimeRow | null {
-	if (!raw.cmplnt_num || !raw.cmplnt_fr_dt) return null;
+function isoDateOnly(v: unknown): string | null {
+	if (typeof v !== "string" || v.length < 10) return null;
+	const value = v.slice(0, 10);
+	return isValidCalendarDate(value) ? value : null;
+}
+
+function normalizeCoordinates(
+	rawLat: unknown,
+	rawLng: unknown,
+	summary: DataQualitySummary
+): { lat: number | null; lng: number | null } {
+	const lat = toFloatOrNull(rawLat);
+	const lng = toFloatOrNull(rawLng);
+
+	if (lat === null && lng === null) {
+		warnRow(summary, "missing_coordinates");
+		return { lat: null, lng: null };
+	}
+
+	if (lat === null || lng === null || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+		warnRow(summary, "invalid_coordinates");
+		return { lat: null, lng: null };
+	}
+
+	return { lat, lng };
+}
+
+function cleanText(value: unknown): string | null {
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim();
+	return trimmed.length > 0 && trimmed.toLowerCase() !== "(null)" ? trimmed : null;
+}
+
+function socrataToCrimeRow(raw: SocrataRecord, summary: DataQualitySummary): CrimeRow | null {
+	const complaintNumber = cleanText(raw.cmplnt_num);
+	if (!complaintNumber) return skipRow(summary, "missing_complaint_number");
 
 	const startDate = isoDateOnly(raw.cmplnt_fr_dt);
-	if (!startDate) return null;
+	if (!startDate) return skipRow(summary, "missing_or_invalid_start_date");
 
-	const lat = toFloatOrNull(raw.latitude);
-	const lng = toFloatOrNull(raw.longitude);
+	const { lat, lng } = normalizeCoordinates(raw.latitude, raw.longitude, summary);
 	const hasGeo = lat !== null && lng !== null;
+	const offenseCategory = cleanText(raw.ofns_desc);
+	if (!offenseCategory) warnRow(summary, "missing_offense_category");
 
 	const reportDt = typeof raw.rpt_dt === "string" ? raw.rpt_dt.replace("T", " ").slice(0, 23) : null;
 
 	return {
-		complaint_number: raw.cmplnt_num,
+		complaint_number: complaintNumber,
 		complaint_start_date: startDate,
 		complaint_start_time: raw.cmplnt_fr_tm ?? null,
 		complaint_end_date: isoDateOnly(raw.cmplnt_to_dt),
 		complaint_end_time: raw.cmplnt_to_tm ?? null,
 		report_datetime: reportDt,
 		offense_code: toIntOrNull(raw.ky_cd),
-		offense_category: raw.ofns_desc ?? "UNKNOWN",
+		offense_category: offenseCategory ?? "UNKNOWN",
 		offense_description: raw.pd_desc ?? raw.ofns_desc ?? null,
 		law_category: raw.law_cat_cd ?? null,
 		borough: raw.boro_nm ?? null,
@@ -131,29 +208,36 @@ function socrataToCrimeRow(raw: SocrataRecord): CrimeRow | null {
 		h3_res_9: hasGeo ? h3UInt64(lat!, lng!, H3_PRIMARY) : null,
 		h3_res_7: hasGeo ? h3UInt64(lat!, lng!, H3_SECONDARY) : null,
 		source_dataset: "qgea-i56i",
-		source_record_url: `${SOCRATA_ENDPOINT}?cmplnt_num=${encodeURIComponent(raw.cmplnt_num)}`,
+		source_record_url: `${SOCRATA_ENDPOINT}?cmplnt_num=${encodeURIComponent(complaintNumber)}`,
 		source_row_checksum: null
 	};
 }
 
-function enrichSampleRow(raw: Record<string, unknown>): CrimeRow {
-	const lat = typeof raw.latitude === "number" ? raw.latitude : toFloatOrNull(raw.latitude);
-	const lng = typeof raw.longitude === "number" ? raw.longitude : toFloatOrNull(raw.longitude);
+function enrichSampleRow(raw: Record<string, unknown>, summary: DataQualitySummary): CrimeRow | null {
+	const complaintNumber = cleanText(raw.complaint_number);
+	if (!complaintNumber) return skipRow(summary, "missing_complaint_number");
+
+	const startDate = isoDateOnly(raw.complaint_start_date);
+	if (!startDate) return skipRow(summary, "missing_or_invalid_start_date");
+
+	const { lat, lng } = normalizeCoordinates(raw.latitude, raw.longitude, summary);
 	const hasGeo = lat !== null && lng !== null;
+	const offenseCategory = cleanText(raw.offense_category);
+	if (!offenseCategory) warnRow(summary, "missing_offense_category");
 
 	// Force-compute H3 from coords if available, ignoring any null placeholders in the sample file.
 	const h3_9 = hasGeo ? h3UInt64(lat!, lng!, H3_PRIMARY) : null;
 	const h3_7 = hasGeo ? h3UInt64(lat!, lng!, H3_SECONDARY) : null;
 
 	return {
-		complaint_number: String(raw.complaint_number ?? ""),
-		complaint_start_date: String(raw.complaint_start_date ?? ""),
+		complaint_number: complaintNumber,
+		complaint_start_date: startDate,
 		complaint_start_time: (raw.complaint_start_time as string | null) ?? null,
 		complaint_end_date: (raw.complaint_end_date as string | null) ?? null,
 		complaint_end_time: (raw.complaint_end_time as string | null) ?? null,
 		report_datetime: (raw.report_datetime as string | null) ?? null,
 		offense_code: toIntOrNull(raw.offense_code),
-		offense_category: (raw.offense_category as string) ?? "UNKNOWN",
+		offense_category: offenseCategory ?? "UNKNOWN",
 		offense_description: (raw.offense_description as string | null) ?? null,
 		law_category: (raw.law_category as string | null) ?? null,
 		borough: (raw.borough as string | null) ?? null,
@@ -171,10 +255,43 @@ function enrichSampleRow(raw: Record<string, unknown>): CrimeRow {
 	};
 }
 
-async function loadSample(): Promise<CrimeRow[]> {
+function mapValidRows<T>(
+	sourceRows: T[],
+	mapper: (row: T, summary: DataQualitySummary) => CrimeRow | null
+): { rows: CrimeRow[]; summary: DataQualitySummary } {
+	const summary = createQualitySummary();
+	summary.sourceRows = sourceRows.length;
+	const rows: CrimeRow[] = [];
+
+	for (const sourceRow of sourceRows) {
+		const row = mapper(sourceRow, summary);
+		if (row) {
+			rows.push(row);
+			summary.importedRows += 1;
+		}
+	}
+
+	return { rows, summary };
+}
+
+function printQualitySummary(summary: DataQualitySummary): void {
+	console.log(
+		`[ingest] data quality: source=${summary.sourceRows} imported=${summary.importedRows} skipped=${summary.skippedRows}`
+	);
+
+	for (const [reason, count] of Object.entries(summary.skippedReasons)) {
+		console.log(`[ingest] skipped.${reason}=${count}`);
+	}
+
+	for (const [reason, count] of Object.entries(summary.warnings)) {
+		console.log(`[ingest] warning.${reason}=${count}`);
+	}
+}
+
+async function loadSample(): Promise<{ rows: CrimeRow[]; summary: DataQualitySummary }> {
 	const samplePath = new URL("../sample/sample.json", import.meta.url);
 	const raw = JSON.parse(readFileSync(samplePath, "utf-8")) as Array<Record<string, unknown>>;
-	return raw.map(enrichSampleRow);
+	return mapValidRows(raw, enrichSampleRow);
 }
 
 async function fetchSocrataPage(pageLimit: number, offset: number): Promise<SocrataRecord[]> {
@@ -183,7 +300,7 @@ async function fetchSocrataPage(pageLimit: number, offset: number): Promise<Socr
 	url.searchParams.set("$offset", String(offset));
 	url.searchParams.set(
 		"$where",
-		"latitude IS NOT NULL AND longitude IS NOT NULL AND cmplnt_fr_dt IS NOT NULL"
+		"cmplnt_num IS NOT NULL AND cmplnt_fr_dt IS NOT NULL"
 	);
 	url.searchParams.set("$order", "cmplnt_fr_dt DESC");
 
@@ -197,7 +314,7 @@ async function fetchSocrataPage(pageLimit: number, offset: number): Promise<Socr
 	return (await res.json()) as SocrataRecord[];
 }
 
-async function fetchSocrata(): Promise<CrimeRow[]> {
+async function fetchSocrata(): Promise<{ rows: CrimeRow[]; summary: DataQualitySummary }> {
 	const target = LIMIT;
 	const raw: SocrataRecord[] = [];
 	let offset = 0;
@@ -219,14 +336,7 @@ async function fetchSocrata(): Promise<CrimeRow[]> {
 
 	console.log(`[ingest] received ${raw.length} raw records across ${page} page(s).`);
 
-	const mapped: CrimeRow[] = [];
-	for (const r of raw) {
-		const row = socrataToCrimeRow(r);
-		if (row) mapped.push(row);
-	}
-	const dropped = raw.length - mapped.length;
-	if (dropped > 0) console.log(`[ingest] dropped ${dropped} records (missing id or date).`);
-	return mapped;
+	return mapValidRows(raw, socrataToCrimeRow);
 }
 
 async function deleteWhereDataset(dataset: string): Promise<void> {
@@ -267,16 +377,19 @@ async function main(): Promise<void> {
 	}
 
 	let rows: CrimeRow[];
+	let summary: DataQualitySummary;
 	let dataset: string;
 	if (MODE === "sample") {
-		rows = await loadSample();
+		({ rows, summary } = await loadSample());
 		dataset = "sample";
 	} else if (MODE === "socrata") {
-		rows = await fetchSocrata();
+		({ rows, summary } = await fetchSocrata());
 		dataset = "qgea-i56i";
 	} else {
 		throw new Error(`Unknown INGEST_MODE '${MODE}'. Expected 'socrata' or 'sample'.`);
 	}
+
+	printQualitySummary(summary);
 
 	const withGeo = rows.filter((r) => r.h3_res_9 !== null).length;
 	console.log(
