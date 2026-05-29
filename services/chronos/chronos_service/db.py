@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 import clickhouse_connect
@@ -59,7 +59,8 @@ class ClickHouseRepository:
         sql = f"""
             SELECT
                 toStartOfWeek(complaint_start_date, 1) AS week,
-                count() AS count
+                count() AS count,
+                max(complaint_start_date) AS max_date_in_week
             FROM raw_nypd_complaints
             WHERE {' AND '.join(where_parts)}
             GROUP BY week
@@ -67,4 +68,18 @@ class ClickHouseRepository:
         """
 
         result = self._client.query(sql, parameters=params)
-        return [WeeklyPoint(week=row[0], count=int(row[1])) for row in result.result_rows]
+        points = [
+            (row[0], int(row[1]), row[2])
+            for row in result.result_rows
+        ]
+
+        # Drop the trailing week if it doesn't reach Sunday (week_start + 6 days)
+        # in the source data: the partial week causes a fake downward step in
+        # the series, which both confuses the model and looks like a crash on
+        # the chart. We accept losing up to 6 days of recency in exchange.
+        if points:
+            week_start, _, week_max_date = points[-1]
+            if week_max_date < week_start + timedelta(days=6):
+                points.pop()
+
+        return [WeeklyPoint(week=week, count=count) for week, count, _ in points]
