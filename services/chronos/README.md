@@ -60,9 +60,57 @@ Errors:
 - **502** — ClickHouse query failure.
 - **500** — model inference failure.
 
+### `GET /forecast/weekly/backtest`
+
+Held-out evaluation: hide the last `horizon` weeks of known data, ask Chronos to forecast them blind, then score the result against the truth. Useful for sizing the model's accuracy on a given filter slice.
+
+Query parameters are the same as `/forecast/weekly`. Response:
+
+```json
+{
+  "target": "weekly_complaint_count",
+  "model": "amazon/chronos-2",
+  "filters": { "borough": "MANHATTAN", "offense": null },
+  "history_weeks": 96,
+  "horizon_weeks": 8,
+  "metrics": {
+    "mae": 118.7,
+    "mape": 5.36,
+    "rmse": 157.8,
+    "r2": -1.45,
+    "coverage": 0.875
+  },
+  "history": [ { "week": "2024-04-08", "count": 2664 }, ... ],
+  "backtest": [
+    { "week": "2026-02-02", "count": 2353.32, "lower": 1988.22, "upper": 2552.22, "actual": 2348 }
+  ],
+  "generated_at": "2026-05-29T15:48:11.482Z"
+}
+```
+
+Metric definitions:
+
+- **`mae`** — Mean Absolute Error, same unit as counts. "We're off by ~X complaints per week."
+- **`mape`** — Mean Absolute Percentage Error (0-100). "We're off by ~X%." Skips zero actuals.
+- **`rmse`** — Root Mean Squared Error. Penalizes large misses more than MAE.
+- **`r2`** — Coefficient of determination. **Noisy when the held-out window has low variance** — a flat 8-week stretch makes R² explode negatively even for a tight forecast. Read it alongside MAPE rather than alone.
+- **`coverage`** — Share of actuals falling within the P10–P90 band (0-1). A well-calibrated model lands near 0.80. < 0.70 = overconfident; > 0.95 = bands too wide.
+
+## Data hygiene
+
+Two automatic cleanups apply to every query, both at the repository layer:
+
+- **Pre-2024 records** are filtered at the Socrata `$where` clause and never reach ClickHouse. The YTD feed in particular contains complaints with very old `cmplnt_fr_dt` (NYPD reports backdated incidents); without this guard the series stretches back to 1970.
+- **The trailing week is dropped if it's incomplete** (the source data doesn't reach Sunday of that week yet). Otherwise the partial last week shows up as an artificial cliff in both the history line and the model's context.
+
 ## Frontend contract
 
-The browser never talks to Chronos directly. The SvelteKit backend exposes `GET /api/forecast/weekly` (`apps/web/src/routes/api/forecast/weekly/+server.ts`) which forwards the request server-side. This keeps Chronos on the internal Docker network and avoids CORS entirely.
+The browser never talks to Chronos directly. The SvelteKit backend exposes two BFF routes that forward the request server-side, keeping Chronos on the internal Docker network and avoiding CORS entirely:
+
+- `GET /api/forecast/weekly` — proxies the forecast endpoint
+- `GET /api/forecast/weekly/backtest` — proxies the backtest endpoint
+
+Both are implemented under `apps/web/src/routes/api/forecast/weekly/`. The home dashboard's "Predictions" section consumes them via the `ForecastChart` Vega-Lite component, with a mode toggle (forecast / backtest) and a horizon selector (4–52 weeks).
 
 ## Configuration
 
@@ -94,12 +142,14 @@ Smoke-test once the service is up:
 ```bash
 curl http://localhost:8000/health
 curl 'http://localhost:8000/forecast/weekly?borough=MANHATTAN&horizon=12'
+curl 'http://localhost:8000/forecast/weekly/backtest?borough=MANHATTAN&horizon=8'
 ```
 
 Or hit it through the SvelteKit BFF:
 
 ```bash
 curl 'http://localhost:5173/api/forecast/weekly?borough=MANHATTAN&horizon=12'
+curl 'http://localhost:5173/api/forecast/weekly/backtest?borough=MANHATTAN&horizon=8'
 ```
 
 OpenAPI / Swagger UI: `http://localhost:8000/docs`.
