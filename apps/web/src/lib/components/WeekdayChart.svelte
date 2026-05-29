@@ -8,9 +8,11 @@
 
   let {
     apiBaseUrl = "http://localhost:3000",
+    filterQuery = "",
     title = "Complaints by weekday"
   }: {
     apiBaseUrl?: string;
+    filterQuery?: string;
     title?: string;
   } = $props();
 
@@ -20,13 +22,25 @@
   let totalComplaints = $state(0);
   let peakLabel = $state("");
   let errorMessage = $state("");
+  let hasLoaded = false;
 
-  async function load() {
-    if (status !== "loading") return;
+  function applyFilters(url: URL, query: string): void {
+    const filters = new URLSearchParams(query);
+    filters.forEach((value, key) => url.searchParams.set(key, value));
+  }
+
+  async function load(query = filterQuery) {
+    hasLoaded = true;
     try {
+      status = "loading";
+      errorMessage = "";
+      result?.finalize();
+      result = undefined;
       const { default: embed } = await import("vega-embed");
 
-      const res = await fetch(`${apiBaseUrl}/analytics/by-weekday`);
+      const url = new URL(`${apiBaseUrl}/analytics/by-weekday`);
+      applyFilters(url, query);
+      const res = await fetch(url.toString());
       if (!res.ok) throw new Error(`API ${res.status} ${res.statusText}`);
       const data = (await res.json()) as ByWeekdayResponse;
 
@@ -87,6 +101,11 @@
       status = "error";
     }
   }
+
+  $effect(() => {
+    const query = filterQuery;
+    if (hasLoaded) void load(query);
+  });
 
   onDestroy(() => result?.finalize());
 </script>

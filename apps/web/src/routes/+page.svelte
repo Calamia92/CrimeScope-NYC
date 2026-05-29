@@ -31,12 +31,19 @@
     return url.toString();
   }
 
+  function buildAnalyticsFilterQuery(): string {
+    const params = new URLSearchParams();
+    if (dateFrom) params.set("from", dateFrom);
+    if (dateTo) params.set("to", dateTo);
+    if (borough) params.set("borough", borough);
+    if (offenseCategory.trim()) params.set("offense", offenseCategory.trim());
+    return params.toString();
+  }
+
   function buildAnalyticsUrl(path: string): string {
     const url = new URL(path, apiBaseUrl);
-    if (dateFrom) url.searchParams.set("from", dateFrom);
-    if (dateTo) url.searchParams.set("to", dateTo);
-    if (borough) url.searchParams.set("borough", borough);
-    if (offenseCategory.trim()) url.searchParams.set("offenseCategory", offenseCategory.trim());
+    const filters = new URLSearchParams(buildAnalyticsFilterQuery());
+    filters.forEach((value, key) => url.searchParams.set(key, value));
     return url.toString();
   }
 
@@ -151,7 +158,7 @@
           <h2>Map</h2>
           <p>Crime density aggregated server-side and rendered with MapLibre GL JS.</p>
         </header>
-        <CrimeMap {apiBaseUrl} />
+        <CrimeMap {apiBaseUrl} filterQuery={buildAnalyticsFilterQuery()} />
       </section>
 
       <section class="analytics-panel" aria-label="Analytics">
@@ -161,12 +168,18 @@
         </header>
         <div class="charts-grid">
           <div class="charts-wide">
-            <TimeSeriesChart {apiBaseUrl} granularity="day" title="Complaints per day" />
+            <TimeSeriesChart
+              {apiBaseUrl}
+              filterQuery={buildAnalyticsFilterQuery()}
+              granularity="day"
+              title="Complaints per day"
+            />
           </div>
-          <HourChart {apiBaseUrl} />
-          <WeekdayChart {apiBaseUrl} />
+          <HourChart {apiBaseUrl} filterQuery={buildAnalyticsFilterQuery()} />
+          <WeekdayChart {apiBaseUrl} filterQuery={buildAnalyticsFilterQuery()} />
           <CategoryChart
             {apiBaseUrl}
+            filterQuery={buildAnalyticsFilterQuery()}
             dimension="offense_category"
             limit={10}
             title="Top offense categories"
