@@ -40,8 +40,13 @@
     "STATEN ISLAND"
   ];
 
-  let dateFrom = $state("");
-  let dateTo = $state("");
+  // Default to the current year so analytics, map and tables show a focused
+  // recent slice. Without this, with ~1.3M records over 27 months the map
+  // saturates and the daily timeseries becomes unreadable. Users can clear the
+  // filter to see the full range.
+  const todayIso = new Date().toISOString().slice(0, 10);
+  let dateFrom = $state(`${todayIso.slice(0, 4)}-01-01`);
+  let dateTo = $state(todayIso);
   let borough = $state("");
   let offenseCategory = $state("");
   let overviewStatus: "loading" | "ready" | "empty" | "error" = $state("loading");
@@ -382,6 +387,9 @@
                 <option value={4}>4 weeks</option>
                 <option value={8}>8 weeks</option>
                 <option value={12}>12 weeks</option>
+                <option value={16}>16 weeks</option>
+                <option value={26}>26 weeks (6 mo)</option>
+                <option value={52}>52 weeks (1 yr)</option>
               </select>
             </label>
           </div>

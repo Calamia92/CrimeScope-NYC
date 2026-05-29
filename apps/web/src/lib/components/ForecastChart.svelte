@@ -86,19 +86,22 @@
       const data = (await res.json()) as ForecastResponse | BacktestResponse;
       modelName = data.model;
 
-      const history = data.history;
+      const fullHistory = data.history;
       const futurePoints: BacktestPoint[] | ForecastPoint[] =
         mode === "backtest" ? (data as BacktestResponse).backtest : (data as ForecastResponse).forecast;
 
-      if (history.length === 0 || futurePoints.length === 0) {
+      if (fullHistory.length === 0 || futurePoints.length === 0) {
         status = "empty";
         return;
       }
 
-      // Track how stale the source data is so the chart can be honest about
-      // the gap between "last known week" and "today" — useful when NYC Open
-      // Data lags by months.
-      lastKnownWeek = history[history.length - 1].week;
+      // Crop the displayed history to ~3× horizon so the forecast region is
+      // clearly visible. Chronos still gets the full series from the backend
+      // for its context — this is purely a display concern.
+      const visibleHistoryWeeks = Math.max(horizon * 3, 12);
+      const history = fullHistory.slice(-visibleHistoryWeeks);
+
+      lastKnownWeek = fullHistory[fullHistory.length - 1].week;
       const lastDate = new Date(lastKnownWeek);
       lagDays = Math.max(0, Math.round((Date.now() - lastDate.getTime()) / 86_400_000));
 
@@ -116,6 +119,9 @@
       const historyValues = history.map((p) => ({ week: p.week, count: p.count }));
       const forecastValues = [bridgePoint, ...futurePoints];
 
+      // Vertical rule between observed history and forecast/held-out region.
+      const splitMarker = [{ week: lastHistory.week }];
+
       if (mode === "backtest") {
         metrics = (data as BacktestResponse).metrics;
       }
@@ -129,6 +135,13 @@
           height: 320,
           padding: { left: 8, right: 8, top: 4, bottom: 0 },
           layer: [
+            {
+              data: { values: splitMarker },
+              mark: { type: "rule", color: "#9aa6ae", strokeDash: [3, 3], strokeWidth: 1 },
+              encoding: {
+                x: { field: "week", type: "temporal" }
+              }
+            },
             {
               data: { values: forecastValues },
               mark: { type: "area", color: "#006d77", opacity: 0.2, interpolate: "monotone" },
@@ -245,11 +258,21 @@
 
   {#if mode === "backtest" && metrics}
     <div class="metrics-row">
-      <div class="metric"><span class="label">MAE</span><strong>{formatNumber(metrics.mae)}</strong></div>
-      <div class="metric"><span class="label">RMSE</span><strong>{formatNumber(metrics.rmse)}</strong></div>
-      <div class="metric"><span class="label">MAPE</span><strong>{formatNumber(metrics.mape)}%</strong></div>
-      <div class="metric"><span class="label">R²</span><strong>{formatNumber(metrics.r2, 3)}</strong></div>
-      <div class="metric"><span class="label">P10–P90 coverage</span><strong>{formatNumber(metrics.coverage * 100, 0)}%</strong></div>
+      <div class="metric">
+        <span class="label">MAPE</span>
+        <strong>{formatNumber(metrics.mape)}%</strong>
+        <span class="hint">avg relative error</span>
+      </div>
+      <div class="metric">
+        <span class="label">MAE</span>
+        <strong>{formatNumber(metrics.mae)}</strong>
+        <span class="hint">avg error in complaints</span>
+      </div>
+      <div class="metric">
+        <span class="label">P10–P90 coverage</span>
+        <strong>{formatNumber(metrics.coverage * 100, 0)}%</strong>
+        <span class="hint">target ≈ 80%</span>
+      </div>
     </div>
   {/if}
 
@@ -361,6 +384,12 @@
   .metric strong {
     font-size: 1.05rem;
     color: #172026;
+  }
+
+  .metric .hint {
+    font-size: 0.7rem;
+    color: #8a98a3;
+    font-style: italic;
   }
 
   .chart-body {
