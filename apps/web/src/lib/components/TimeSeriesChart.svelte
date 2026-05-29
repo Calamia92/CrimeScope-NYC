@@ -12,10 +12,12 @@
 
   let {
     apiBaseUrl = "http://localhost:3000",
+    filterQuery = "",
     granularity = "month",
     title = "Complaints over time"
   }: {
     apiBaseUrl?: string;
+    filterQuery?: string;
     granularity?: "day" | "week" | "month";
     title?: string;
   } = $props();
@@ -26,16 +28,27 @@
   let bucketCount = $state(0);
   let totalComplaints = $state(0);
   let errorMessage = $state("");
+  let hasLoaded = false;
 
-  async function load() {
-    if (status !== "loading") return; // observer can fire only once but be safe
+  function applyFilters(url: URL, query: string): void {
+    const filters = new URLSearchParams(query);
+    filters.forEach((value, key) => url.searchParams.set(key, value));
+  }
+
+  async function load(query = filterQuery) {
+    hasLoaded = true;
     try {
+      status = "loading";
+      errorMessage = "";
+      result?.finalize();
+      result = undefined;
       // Dynamic import so vega-embed (and its ~700 KB of vega deps) is split into a separate chunk
       // and only downloaded once the first chart actually needs it.
       const { default: embed } = await import("vega-embed");
 
       const url = new URL(`${apiBaseUrl}/analytics/by-date`);
       url.searchParams.set("granularity", granularity);
+      applyFilters(url, query);
       const res = await fetch(url.toString());
       if (!res.ok) throw new Error(`API ${res.status} ${res.statusText}`);
       const data = (await res.json()) as ByDateResponse;
@@ -110,6 +123,11 @@
       status = "error";
     }
   }
+
+  $effect(() => {
+    const query = filterQuery;
+    if (hasLoaded) void load(query);
+  });
 
   onDestroy(() => result?.finalize());
 </script>

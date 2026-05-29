@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
-  import maplibregl, { type Map } from "maplibre-gl";
+  import maplibregl, { type GeoJSONSource, type Map } from "maplibre-gl";
   import "maplibre-gl/dist/maplibre-gl.css";
   import { cellToBoundary } from "h3-js";
 
@@ -11,7 +11,10 @@
     cells: H3Cell[];
   };
 
-  let { apiBaseUrl = "http://localhost:3000" }: { apiBaseUrl?: string } = $props();
+  let {
+    apiBaseUrl = "http://localhost:3000",
+    filterQuery = ""
+  }: { apiBaseUrl?: string; filterQuery?: string } = $props();
 
   // Step-function palette: visible thresholds match the legend below.
   const STOPS: Array<[number, string]> = [
@@ -32,6 +35,14 @@
   let totalComplaints = $state(0);
   let errorMessage = $state("");
 
+  function buildCellsUrl(): string {
+    const url = new URL(`${apiBaseUrl}/aggregations/h3`);
+    url.searchParams.set("resolution", "9");
+    const filters = new URLSearchParams(filterQuery);
+    filters.forEach((value, key) => url.searchParams.set(key, value));
+    return url.toString();
+  }
+
   function cellsToGeoJson(cells: H3Cell[]): GeoJSON.FeatureCollection {
     return {
       type: "FeatureCollection",
@@ -49,7 +60,8 @@
 
   async function loadCells(currentMap: Map): Promise<void> {
     try {
-      const res = await fetch(`${apiBaseUrl}/aggregations/h3?resolution=9`);
+      status = "loading";
+      const res = await fetch(buildCellsUrl());
       if (!res.ok) throw new Error(`API returned ${res.status} ${res.statusText}`);
       const data = (await res.json()) as H3Response;
       cellCount = data.cellCount;
@@ -57,6 +69,13 @@
       totalComplaints = data.cells.reduce((s, c) => s + c.count, 0);
 
       const geojson = cellsToGeoJson(data.cells);
+      const source = currentMap.getSource("h3-cells") as GeoJSONSource | undefined;
+      if (source) {
+        source.setData(geojson);
+        status = "ready";
+        return;
+      }
+
       currentMap.addSource("h3-cells", { type: "geojson", data: geojson });
 
       // Flatten STOPS into a MapLibre `step` expression.
@@ -171,6 +190,13 @@
     map.on("load", () => {
       if (map) loadCells(map);
     });
+  });
+
+  $effect(() => {
+    filterQuery;
+    if (map?.isStyleLoaded() && map.getSource("h3-cells")) {
+      void loadCells(map);
+    }
   });
 
   onDestroy(() => {

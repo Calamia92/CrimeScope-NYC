@@ -1,11 +1,58 @@
 <script lang="ts">
+  import { env } from "$env/dynamic/public";
   import CategoryChart from "$lib/components/CategoryChart.svelte";
   import CrimeMap from "$lib/components/CrimeMap.svelte";
   import HourChart from "$lib/components/HourChart.svelte";
   import TimeSeriesChart from "$lib/components/TimeSeriesChart.svelte";
   import WeekdayChart from "$lib/components/WeekdayChart.svelte";
 
-  const apiBaseUrl = import.meta.env.PUBLIC_API_BASE_URL ?? "http://localhost:3000";
+  const apiBaseUrl = env.PUBLIC_API_BASE_URL ?? "http://localhost:3000";
+
+  const boroughOptions = [
+    "",
+    "BRONX",
+    "BROOKLYN",
+    "MANHATTAN",
+    "QUEENS",
+    "STATEN ISLAND"
+  ];
+
+  let dateFrom = $state("");
+  let dateTo = $state("");
+  let borough = $state("");
+  let offenseCategory = $state("");
+
+  function buildCrimeRecordsUrl(): string {
+    const url = new URL("/crime-records", apiBaseUrl);
+    if (dateFrom) url.searchParams.set("from", dateFrom);
+    if (dateTo) url.searchParams.set("to", dateTo);
+    if (borough) url.searchParams.set("borough", borough);
+    if (offenseCategory.trim()) url.searchParams.set("offenseCategory", offenseCategory.trim());
+    return url.toString();
+  }
+
+  function buildAnalyticsFilterQuery(): string {
+    const params = new URLSearchParams();
+    if (dateFrom) params.set("from", dateFrom);
+    if (dateTo) params.set("to", dateTo);
+    if (borough) params.set("borough", borough);
+    if (offenseCategory.trim()) params.set("offense", offenseCategory.trim());
+    return params.toString();
+  }
+
+  function buildAnalyticsUrl(path: string): string {
+    const url = new URL(path, apiBaseUrl);
+    const filters = new URLSearchParams(buildAnalyticsFilterQuery());
+    filters.forEach((value, key) => url.searchParams.set(key, value));
+    return url.toString();
+  }
+
+  const clearFilters = () => {
+    dateFrom = "";
+    dateTo = "";
+    borough = "";
+    offenseCategory = "";
+  };
 </script>
 
 <svelte:head>
@@ -18,79 +65,128 @@
 
 <main class="shell">
   <section class="hero">
-    <p class="eyebrow">Open Data / Big Data Project</p>
-    <h1>CrimeScope NYC</h1>
-    <p class="summary">
-      A Docker-first foundation for exploring NYPD crime data with maps, filters,
-      analytics, and future time-series prediction.
-    </p>
-  </section>
-
-  <section class="map-section" aria-label="Crime density map">
-    <header class="section-header">
-      <h2>Crime density (H3 resolution 9)</h2>
-      <p>Live NYC Open Data, aggregated server-side and rendered with MapLibre GL JS.</p>
-    </header>
-    <CrimeMap {apiBaseUrl} />
-  </section>
-
-  <section class="analytics-section" aria-label="Analytics">
-    <header class="section-header">
-      <h2>Analytics</h2>
-      <p>Aggregated views of the ingested complaints, powered by Vega-Lite.</p>
-    </header>
-    <div class="charts-grid">
-      <div class="charts-wide">
-        <TimeSeriesChart
-          {apiBaseUrl}
-          granularity="day"
-          title="Complaints per day"
-        />
+    <div class="eyebrow-row">
+      <p class="eyebrow">Open Data / Big Data Project</p>
+      <span class="api-pill">API: {apiBaseUrl}</span>
+    </div>
+    <div class="hero-copy">
+      <div>
+        <h1>CrimeScope NYC</h1>
+        <p class="summary">
+          A simple dashboard for browsing NYPD complaint data with a map, quick filters,
+          and analytics cards. Built to run entirely in Docker.
+        </p>
       </div>
-      <HourChart {apiBaseUrl} />
-      <WeekdayChart {apiBaseUrl} />
-      <CategoryChart
-        {apiBaseUrl}
-        dimension="offense_category"
-        limit={10}
-        title="Top offense categories"
-      />
-      <CategoryChart
-        {apiBaseUrl}
-        dimension="borough"
-        limit={5}
-        title="Complaints by borough"
-      />
-      <CategoryChart
-        {apiBaseUrl}
-        dimension="law_category"
-        limit={5}
-        title="Severity (law category)"
-      />
+      <div class="hero-links">
+        <a href={`${apiBaseUrl}/crime-records?page=1&pageSize=25`} target="_blank" rel="noreferrer">
+          Open records API
+        </a>
+        <a href={`${apiBaseUrl}/health`} target="_blank" rel="noreferrer">
+          API health
+        </a>
+      </div>
     </div>
   </section>
 
-  <section class="status-grid" aria-label="Service links">
-    <a href={`${apiBaseUrl}/health`} target="_blank" rel="noreferrer">
-      <span>API</span>
-      <strong>/health</strong>
-    </a>
-    <a href={`${apiBaseUrl}/db-health`} target="_blank" rel="noreferrer">
-      <span>ClickHouse</span>
-      <strong>/db-health</strong>
-    </a>
-    <a href={`${apiBaseUrl}/aggregations/h3?resolution=9`} target="_blank" rel="noreferrer">
-      <span>API</span>
-      <strong>/aggregations/h3</strong>
-    </a>
-    <a href={`${apiBaseUrl}/analytics/by-date?granularity=month`} target="_blank" rel="noreferrer">
-      <span>API</span>
-      <strong>/analytics/by-date</strong>
-    </a>
-    <a href={`${apiBaseUrl}/analytics/by-category?dimension=offense_category`} target="_blank" rel="noreferrer">
-      <span>API</span>
-      <strong>/analytics/by-category</strong>
-    </a>
+  <section class="dashboard-grid" aria-label="CrimeScope dashboard">
+    <aside class="filters-panel" aria-label="Filters">
+      <header class="section-header">
+        <h2>Filters</h2>
+        <p>Use these controls to narrow the dashboard and preview the API query.</p>
+      </header>
+
+      <div class="filter-form">
+        <label>
+          <span>Date from</span>
+          <input bind:value={dateFrom} type="date" />
+        </label>
+
+        <label>
+          <span>Date to</span>
+          <input bind:value={dateTo} type="date" />
+        </label>
+
+        <label>
+          <span>Borough</span>
+          <select bind:value={borough}>
+            {#each boroughOptions as option}
+              <option value={option}>{option || "Any borough"}</option>
+            {/each}
+          </select>
+        </label>
+
+        <label>
+          <span>Offense category</span>
+          <input
+            bind:value={offenseCategory}
+            type="text"
+            placeholder="e.g. Assault, Theft"
+          />
+        </label>
+      </div>
+
+      <div class="filter-actions">
+        <a class="primary-link" href={buildCrimeRecordsUrl()} target="_blank" rel="noreferrer">
+          View filtered records
+        </a>
+        <button type="button" class="secondary-button" on:click={clearFilters}>
+          Reset filters
+        </button>
+      </div>
+
+      <div class="filter-summary">
+        <span>Current query</span>
+        <code>{buildCrimeRecordsUrl()}</code>
+      </div>
+
+      <div class="api-links">
+        <a href={buildAnalyticsUrl("/analytics/by-date?granularity=month")} target="_blank" rel="noreferrer">
+          Monthly trend
+        </a>
+        <a href={buildAnalyticsUrl("/analytics/by-category?dimension=offense_category&limit=10")} target="_blank" rel="noreferrer">
+          Top categories
+        </a>
+        <a href={buildAnalyticsUrl("/aggregations/h3?resolution=9")} target="_blank" rel="noreferrer">
+          H3 density
+        </a>
+      </div>
+    </aside>
+
+    <div class="content-stack">
+      <section class="map-panel" aria-label="Map">
+        <header class="section-header">
+          <h2>Map</h2>
+          <p>Crime density aggregated server-side and rendered with MapLibre GL JS.</p>
+        </header>
+        <CrimeMap {apiBaseUrl} filterQuery={buildAnalyticsFilterQuery()} />
+      </section>
+
+      <section class="analytics-panel" aria-label="Analytics">
+        <header class="section-header">
+          <h2>Analytics</h2>
+          <p>Simple time and category views for the current dataset.</p>
+        </header>
+        <div class="charts-grid">
+          <div class="charts-wide">
+            <TimeSeriesChart
+              {apiBaseUrl}
+              filterQuery={buildAnalyticsFilterQuery()}
+              granularity="day"
+              title="Complaints per day"
+            />
+          </div>
+          <HourChart {apiBaseUrl} filterQuery={buildAnalyticsFilterQuery()} />
+          <WeekdayChart {apiBaseUrl} filterQuery={buildAnalyticsFilterQuery()} />
+          <CategoryChart
+            {apiBaseUrl}
+            filterQuery={buildAnalyticsFilterQuery()}
+            dimension="offense_category"
+            limit={10}
+            title="Top offense categories"
+          />
+        </div>
+      </section>
+    </div>
   </section>
 </main>
 
@@ -100,23 +196,35 @@
     font-family:
       Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
       sans-serif;
-    color: #172026;
-    background: #f6f8fa;
+    color: #14212b;
+    background:
+      radial-gradient(circle at top left, rgba(0, 109, 119, 0.16), transparent 32%),
+      radial-gradient(circle at top right, rgba(176, 0, 38, 0.14), transparent 28%),
+      #f6f8fa;
   }
 
   .shell {
     min-height: 100vh;
     display: grid;
     align-content: start;
-    gap: 2.5rem;
-    max-width: 1200px;
+    gap: 2rem;
+    max-width: 1360px;
     margin: 0 auto;
-    padding: 3rem 1.5rem;
+    padding: 2rem 1rem 3rem;
   }
 
   .hero {
     display: grid;
     gap: 1rem;
+    padding: 1.25rem 1.25rem 0;
+  }
+
+  .eyebrow-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
   }
 
   .eyebrow {
@@ -127,9 +235,29 @@
     font-size: 0.8rem;
   }
 
+  .api-pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2rem;
+    padding: 0 0.75rem;
+    border-radius: 999px;
+    background: rgba(0, 109, 119, 0.1);
+    color: #005d68;
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+
+  .hero-copy {
+    display: flex;
+    justify-content: space-between;
+    align-items: end;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+  }
+
   h1 {
     margin: 0;
-    font-size: clamp(2.5rem, 8vw, 5rem);
+    font-size: clamp(2.4rem, 8vw, 4.8rem);
     line-height: 1;
     letter-spacing: 0;
   }
@@ -142,10 +270,69 @@
     line-height: 1.6;
   }
 
-  .map-section,
-  .analytics-section {
+  .hero-links {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .hero-links a,
+  .primary-link,
+  .api-links a,
+  .secondary-button {
+    border-radius: 10px;
+    font-weight: 700;
+    text-decoration: none;
+    transition:
+      transform 120ms ease,
+      box-shadow 120ms ease,
+      background-color 120ms ease,
+      color 120ms ease;
+  }
+
+  .hero-links a,
+  .primary-link,
+  .api-links a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 2.6rem;
+    padding: 0 1rem;
+    background: #14212b;
+    color: #f6f8fa;
+  }
+
+  .hero-links a:hover,
+  .primary-link:hover,
+  .api-links a:hover,
+  .secondary-button:hover {
+    transform: translateY(-1px);
+  }
+
+  .dashboard-grid {
+    display: grid;
+    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+    gap: 1.25rem;
+    align-items: start;
+    padding: 0 1rem;
+  }
+
+  .filters-panel,
+  .map-panel,
+  .analytics-panel {
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid #d8e0e6;
+    border-radius: 18px;
+    box-shadow: 0 14px 34px rgba(20, 33, 43, 0.08);
+    overflow: hidden;
+  }
+
+  .filters-panel {
+    position: sticky;
+    top: 1rem;
     display: grid;
     gap: 1rem;
+    padding: 1.2rem;
   }
 
   .section-header {
@@ -164,6 +351,96 @@
     font-size: 0.95rem;
   }
 
+  .filter-form {
+    display: grid;
+    gap: 0.9rem;
+  }
+
+  .filter-form label {
+    display: grid;
+    gap: 0.35rem;
+  }
+
+  .filter-form span {
+    color: #4d5b65;
+    font-size: 0.86rem;
+    font-weight: 700;
+  }
+
+  .filter-form input,
+  .filter-form select {
+    width: 100%;
+    min-height: 2.6rem;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid #cfd8df;
+    border-radius: 10px;
+    background: #fff;
+    color: #14212b;
+    font: inherit;
+    box-sizing: border-box;
+  }
+
+  .filter-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .secondary-button {
+    min-height: 2.6rem;
+    border: 1px solid #cfd8df;
+    background: #fff;
+    color: #14212b;
+    cursor: pointer;
+    padding: 0 1rem;
+  }
+
+  .filter-summary {
+    display: grid;
+    gap: 0.4rem;
+  }
+
+  .filter-summary span {
+    color: #4d5b65;
+    font-size: 0.86rem;
+    font-weight: 700;
+  }
+
+  .filter-summary code {
+    padding: 0.75rem;
+    border-radius: 12px;
+    background: #f6f8fa;
+    border: 1px solid #d8e0e6;
+    color: #4d5b65;
+    font-size: 0.78rem;
+    word-break: break-all;
+  }
+
+  .api-links {
+    display: grid;
+    gap: 0.65rem;
+  }
+
+  .api-links a {
+    background: #006d77;
+  }
+
+  .content-stack {
+    display: grid;
+    gap: 1.25rem;
+  }
+
+  .map-panel,
+  .analytics-panel {
+    display: grid;
+    gap: 1rem;
+    padding: 1.2rem;
+  }
+
+  .map-panel {
+    min-height: 560px;
+  }
+
   .charts-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
@@ -174,30 +451,33 @@
     grid-column: 1 / -1;
   }
 
-  .status-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 1rem;
+  @media (max-width: 1024px) {
+    .dashboard-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .filters-panel {
+      position: static;
+    }
   }
 
-  .status-grid a {
-    display: grid;
-    gap: 0.35rem;
-    min-height: 96px;
-    padding: 1rem;
-    border: 1px solid #d8e0e6;
-    border-radius: 8px;
-    color: inherit;
-    text-decoration: none;
-    background: white;
-  }
+  @media (max-width: 640px) {
+    .shell {
+      padding: 1rem 0.75rem 2rem;
+    }
 
-  .status-grid span {
-    color: #60717d;
-    font-size: 0.9rem;
-  }
+    .hero,
+    .dashboard-grid {
+      padding-left: 0;
+      padding-right: 0;
+    }
 
-  .status-grid strong {
-    font-size: 1.2rem;
+    .filter-actions {
+      grid-template-columns: 1fr;
+    }
+
+    .charts-grid {
+      grid-template-columns: 1fr;
+    }
   }
 </style>

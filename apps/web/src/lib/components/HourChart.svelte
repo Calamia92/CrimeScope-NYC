@@ -8,9 +8,11 @@
 
   let {
     apiBaseUrl = "http://localhost:3000",
+    filterQuery = "",
     title = "Complaints by hour of day"
   }: {
     apiBaseUrl?: string;
+    filterQuery?: string;
     title?: string;
   } = $props();
 
@@ -20,13 +22,25 @@
   let totalComplaints = $state(0);
   let peakHour = $state<number | null>(null);
   let errorMessage = $state("");
+  let hasLoaded = false;
 
-  async function load() {
-    if (status !== "loading") return;
+  function applyFilters(url: URL, query: string): void {
+    const filters = new URLSearchParams(query);
+    filters.forEach((value, key) => url.searchParams.set(key, value));
+  }
+
+  async function load(query = filterQuery) {
+    hasLoaded = true;
     try {
+      status = "loading";
+      errorMessage = "";
+      result?.finalize();
+      result = undefined;
       const { default: embed } = await import("vega-embed");
 
-      const res = await fetch(`${apiBaseUrl}/analytics/by-hour`);
+      const url = new URL(`${apiBaseUrl}/analytics/by-hour`);
+      applyFilters(url, query);
+      const res = await fetch(url.toString());
       if (!res.ok) throw new Error(`API ${res.status} ${res.statusText}`);
       const data = (await res.json()) as ByHourResponse;
 
@@ -86,6 +100,11 @@
       status = "error";
     }
   }
+
+  $effect(() => {
+    const query = filterQuery;
+    if (hasLoaded) void load(query);
+  });
 
   onDestroy(() => result?.finalize());
 </script>
