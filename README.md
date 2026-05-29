@@ -28,13 +28,74 @@ You do not need to install Bun, Python, ClickHouse, or frontend/backend dependen
 
 ## Start The Project
 
-From this folder, run:
+Clone the repository, enter the project folder, then start the stack:
+
+```bash
+git clone https://github.com/Calamia92/CrimeScope-NYC.git
+cd CrimeScope-NYC
+```
+
+Copy the example environment file only if you want to override ports or credentials:
+
+```bash
+cp .env.example .env
+```
+
+Start everything with Docker Compose:
 
 ```bash
 docker compose up --build
 ```
 
 The first run downloads images and installs dependencies inside Docker containers.
+Keep this terminal open while you use the app.
+
+## Common Commands
+
+Start the stack:
+
+```bash
+docker compose up --build
+```
+
+Start in the background:
+
+```bash
+docker compose up -d --build
+```
+
+Stop containers without deleting ClickHouse data:
+
+```bash
+docker compose down
+```
+
+Rebuild after dependency or Dockerfile changes:
+
+```bash
+docker compose build
+docker compose up
+```
+
+View service logs:
+
+```bash
+docker compose logs -f web
+docker compose logs -f api
+docker compose logs -f clickhouse
+```
+
+Run the web type check inside Docker:
+
+```bash
+docker compose exec web bun run check
+```
+
+Check running containers and ports:
+
+```bash
+docker compose ps
+```
 
 ## Local URLs
 
@@ -44,6 +105,30 @@ The first run downloads images and installs dependencies inside Docker container
 - ClickHouse HTTP: http://localhost:8123
 - ClickHouse native TCP: localhost:9000
 - Chronos placeholder: http://localhost:8000
+
+## Folder Structure
+
+```text
+apps/
+  web/        SvelteKit frontend running on Bun and Vite
+  api/        ElysiaJS API running on Bun
+clickhouse/
+  init/       SQL files loaded by ClickHouse on a fresh volume
+packages/
+  ingest/     Bun/TypeScript ingestion scripts for NYC Open Data
+services/
+  chronos/    Placeholder Python service for future Chronos predictions
+```
+
+## Service Responsibilities
+
+| Service | Purpose | Port |
+|---|---|---|
+| `web` | SvelteKit dashboard, map, filters, and analytics UI | `5173` |
+| `api` | ElysiaJS HTTP API for health checks, records, H3 aggregation, and analytics | `3000` |
+| `clickhouse` | Persistent analytical database for NYPD complaint records | `8123`, `9000` |
+| `ingest` | Optional profile service that loads sample or Socrata data into ClickHouse | none |
+| `chronos` | Placeholder service for future time-series prediction work | `8000` |
 
 ## Run The Ingestion
 
@@ -149,3 +234,42 @@ cp .env.example .env
 ```
 
 Docker Compose also works without a `.env` file because defaults are defined in `docker-compose.yml`.
+
+## Troubleshooting
+
+If Docker Desktop is not running, start it first, wait until the engine is ready, then rerun `docker compose up --build`.
+
+If a port is already used, either stop the other app or override the port in `.env`:
+
+```bash
+WEB_PORT=5174
+API_PORT=3001
+CLICKHOUSE_HTTP_PORT=8124
+CLICKHOUSE_NATIVE_PORT=9001
+CHRONOS_PORT=8001
+```
+
+If the app cannot reach the API, check that both `web` and `api` are running:
+
+```bash
+docker compose ps
+docker compose logs -f api
+```
+
+If ClickHouse starts but the schema is missing, apply the init SQL manually:
+
+```bash
+docker compose exec clickhouse sh -c "clickhouse-client --user crimescope --password crimescope_password --multiquery < /docker-entrypoint-initdb.d/001_create_raw_nypd_complaints.sql"
+```
+
+If you want to reset all local database data, stop the stack and delete the ClickHouse volume:
+
+```bash
+docker compose down -v
+```
+
+Use `docker compose down -v` carefully because it removes the local ClickHouse data volume.
+
+## IDE Notes
+
+Any IDE can be used. Project-specific IDE files such as `.idea/` and `*.iml` are ignored by Git, so teammates do not need IntelliJ IDEA or the same editor setup.
