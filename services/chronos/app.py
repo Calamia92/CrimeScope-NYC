@@ -10,12 +10,16 @@ from fastapi.concurrency import run_in_threadpool
 
 from chronos_service.config import Settings, load_settings
 from chronos_service.db import ClickHouseRepository, WeeklyPoint
+from chronos_service.metrics import coverage, mae, mape, r2, rmse
 from chronos_service.model import ChronosForecaster
 from chronos_service.schemas import (
+    BacktestMetrics,
+    BacktestPointOut,
     ForecastFilters,
     ForecastPointOut,
     HealthResponse,
     HistoryPointOut,
+    WeeklyBacktestResponse,
     WeeklyForecastResponse,
 )
 
@@ -130,6 +134,93 @@ async def forecast_weekly(
         horizon_weeks=horizon,
         history=[HistoryPointOut(week=p.week, count=p.count) for p in history],
         forecast=forecast_points,
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
+@app.get(
+    "/forecast/weekly/backtest",
+    response_model=WeeklyBacktestResponse,
+    tags=["forecast"],
+    summary="Hold-out evaluation: forecast the last N known weeks and score it",
+)
+async def forecast_weekly_backtest(
+    request: Request,
+    borough: Optional[str] = Query(default=None),
+    offense: Optional[str] = Query(default=None),
+    horizon: int = Query(
+        default=settings.default_horizon_weeks,
+        ge=1,
+        le=settings.max_horizon_weeks,
+        description="Number of trailing known weeks to hold out and score against.",
+    ),
+    history_weeks: int = Query(
+        default=settings.default_history_weeks,
+        ge=settings.min_history_points,
+        le=settings.max_history_weeks,
+        description="Context window length after the hold-out has been removed.",
+    ),
+) -> WeeklyBacktestResponse:
+    repo: ClickHouseRepository = request.app.state.repo
+    forecaster: ChronosForecaster = request.app.state.forecaster
+
+    try:
+        full_history: list[WeeklyPoint] = await run_in_threadpool(
+            repo.weekly_counts, borough=borough, offense=offense
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"ClickHouse query failed: {exc}") from exc
+
+    # We need at least `min_history_points` of context AFTER carving out `horizon`
+    # weeks of ground truth. Otherwise the forecast itself can't be produced.
+    required = horizon + settings.min_history_points
+    if len(full_history) < required:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Not enough weekly history to backtest: got {len(full_history)} points, "
+                f"need >= {required} (horizon={horizon} + min context={settings.min_history_points})."
+            ),
+        )
+
+    held_out = full_history[-horizon:]
+    context_full = full_history[:-horizon]
+    context = context_full[-history_weeks:]
+
+    values = [float(p.count) for p in context]
+    try:
+        bands = await run_in_threadpool(forecaster.forecast, values, horizon)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Model inference failed: {exc}") from exc
+
+    actual = [float(p.count) for p in held_out]
+    metrics = BacktestMetrics(
+        mae=round(mae(actual, bands.median), 3),
+        mape=round(mape(actual, bands.median), 3),
+        rmse=round(rmse(actual, bands.median), 3),
+        r2=round(r2(actual, bands.median), 4),
+        coverage=round(coverage(actual, bands.lower, bands.upper), 3),
+    )
+
+    backtest_points = [
+        BacktestPointOut(
+            week=held_out[i].week,
+            count=round(bands.median[i], 2),
+            lower=round(bands.lower[i], 2),
+            upper=round(bands.upper[i], 2),
+            actual=held_out[i].count,
+        )
+        for i in range(horizon)
+    ]
+
+    return WeeklyBacktestResponse(
+        model=forecaster.model_name,
+        filters=ForecastFilters(borough=borough, offense=offense),
+        history_weeks=len(context),
+        horizon_weeks=horizon,
+        metrics=metrics,
+        history=[HistoryPointOut(week=p.week, count=p.count) for p in context],
+        backtest=backtest_points,
         generated_at=datetime.now(timezone.utc),
     )
 
