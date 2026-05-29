@@ -6,6 +6,9 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "scripts": {
+    "check": "tsc --noEmit --strict src/index.ts"
+  },
   "devDependencies": {
     "typescript": "^5.7.2"
   }

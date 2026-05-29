@@ -91,6 +91,15 @@ Run the web type check inside Docker:
 docker compose exec web bun run check
 ```
 
+Run package checks without installing project tools locally:
+
+```bash
+docker compose run --rm --no-deps web bun run check
+docker compose run --rm --no-deps api bun run check
+docker compose --profile ingest run --rm --no-deps ingest bun run check
+docker run --rm -v "$PWD/packages/contracts:/src:ro" -w /tmp oven/bun:1.1.42 sh -c "cp -r /src contracts && cd contracts && bun install && bun run check"
+```
+
 Check running containers and ports:
 
 ```bash
@@ -227,6 +236,10 @@ Cells are sorted by descending count and capped at 5 000 per response.
 The current JSON contracts for records, filters, map aggregations, charts, and future Chronos predictions are documented in [`docs/api-contract.md`](docs/api-contract.md).
 
 Shared TypeScript reference types live in `packages/contracts/src/index.ts`.
+
+## CI
+
+GitHub Actions runs the lightweight Docker-first checks in `.github/workflows/ci.yml` on pull requests and pushes to `master`. The workflow validates Docker Compose, builds the service images, checks `/health`, and runs TypeScript checks for web, API, ingest, and contracts.
 
 ## ClickHouse Schema
 

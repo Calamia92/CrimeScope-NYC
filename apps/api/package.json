@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "check": "tsc --noEmit",
     "dev": "bun --hot src/index.ts",
     "start": "bun src/index.ts"
   },
