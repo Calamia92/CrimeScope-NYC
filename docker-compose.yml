@@ -48,10 +48,12 @@ services:
     container_name: crimescope-web
     environment:
       PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:3000}
+      CHRONOS_URL: ${CHRONOS_URL:-http://chronos:8000}
     ports:
       - "${WEB_PORT:-5173}:5173"
     depends_on:
       - api
+      - chronos
 
   ingest:
     build:
@@ -77,11 +79,22 @@ services:
   chronos:
     build:
       context: ./services/chronos
+      args:
+        CHRONOS_MODEL: ${CHRONOS_MODEL:-amazon/chronos-2}
     container_name: crimescope-chronos
     environment:
       CHRONOS_PORT: 8000
+      CHRONOS_MODEL: ${CHRONOS_MODEL:-amazon/chronos-2}
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_HTTP_PORT: 8123
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-crimescope}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-crimescope}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-crimescope_password}
     ports:
       - "${CHRONOS_PORT:-8000}:8000"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
 
 volumes:
   clickhouse-data:
