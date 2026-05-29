@@ -33,11 +33,15 @@ const HISTORIC_SOURCE: SocrataSource = {
 	where: `cmplnt_num IS NOT NULL AND cmplnt_fr_dt IS NOT NULL AND cmplnt_fr_dt >= '${INGEST_HISTORIC_FROM}T00:00:00'`
 };
 
+// YTD is keyed on the *report* date (rpt_dt), so it can contain complaints
+// whose actual occurrence (cmplnt_fr_dt) is much older — sometimes back to the
+// 70s. We apply the same date floor as the historic ingest to keep the time
+// series clean for analytics, the map, and Chronos.
 const YTD_SOURCE: SocrataSource = {
 	endpoint: SOCRATA_YTD_ENDPOINT,
 	dataset: "5uac-w243",
 	label: "year-to-date",
-	where: "cmplnt_num IS NOT NULL AND cmplnt_fr_dt IS NOT NULL"
+	where: `cmplnt_num IS NOT NULL AND cmplnt_fr_dt IS NOT NULL AND cmplnt_fr_dt >= '${INGEST_HISTORIC_FROM}T00:00:00'`
 };
 
 const CLICKHOUSE_HOST = process.env.CLICKHOUSE_HOST ?? "clickhouse";
