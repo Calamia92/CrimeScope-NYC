@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+jobs:
+  docker-checks:
+    name: Docker checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Docker Compose
+        run: docker compose config
+
+      - name: Build Docker images
+        run: docker compose --profile ingest build
+
+      - name: Start API stack
+        run: docker compose up -d clickhouse api
+
+      - name: Check API health
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent http://localhost:3000/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs api
+          exit 1
+
+      - name: Check web TypeScript
+        run: docker compose run --rm --no-deps web bun run check
+
+      - name: Check API TypeScript
+        run: docker compose run --rm --no-deps api bun run check
+
+      - name: Check ingest TypeScript
+        run: docker compose --profile ingest run --rm --no-deps ingest bun run check
+
+      - name: Check contracts TypeScript
+        run: docker run --rm -v "$PWD/packages/contracts:/src:ro" -w /tmp oven/bun:1.1.42 sh -c "cp -r /src contracts && cd contracts && bun install && bun run check"
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Stop containers
+        if: always()
+        run: docker compose --profile ingest down
