@@ -211,6 +211,12 @@ Response shape (truncated):
 
 Cells are sorted by descending count and capped at 5 000 per response.
 
+## API Contract
+
+The current JSON contracts for records, filters, map aggregations, charts, and future Chronos predictions are documented in [`docs/api-contract.md`](docs/api-contract.md).
+
+Shared TypeScript reference types live in `packages/contracts/src/index.ts`.
+
 ## ClickHouse Schema
 
 The first raw table lives in [`clickhouse/init/001_create_raw_nypd_complaints.sql`](clickhouse/init/001_create_raw_nypd_complaints.sql).
