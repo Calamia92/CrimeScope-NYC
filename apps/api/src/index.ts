@@ -34,8 +34,175 @@ const MAX_CATEGORY_LIMIT = 100;
 type H3AggregationRow = { cell: string; count: string };
 type ByDateRow = { bucket: string; count: string };
 type ByCategoryRow = { key: string; count: string };
+type CrimeRecordRow = {
+  complaint_number: string;
+  complaint_start_date: string;
+  complaint_start_time: string | null;
+  complaint_end_date: string | null;
+  complaint_end_time: string | null;
+  offense_category: string;
+  borough: string | null;
+  precinct: number | null;
+  latitude: number | null;
+  longitude: number | null;
+  source_dataset: string;
+};
+type CrimeRecordsResponse = {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  filters: {
+    from?: string;
+    to?: string;
+    borough?: string;
+    offenseCategory?: string;
+    precinct?: number;
+  };
+  items: CrimeRecordRow[];
+};
 
 type QueryRecord = Record<string, string | undefined>;
+
+type CrimeRecordsQuery = QueryRecord & {
+  page?: string;
+  pageSize?: string;
+  from?: string;
+  to?: string;
+  borough?: string;
+  offenseCategory?: string;
+  precinct?: string;
+};
+
+type ValidatedCrimeRecordsQuery = {
+  page: number;
+  pageSize: number;
+  offset: number;
+  from?: string;
+  to?: string;
+  borough?: string;
+  offenseCategory?: string;
+  precinct?: number;
+};
+
+const MAX_RECORD_PAGE_SIZE = 100;
+
+function parsePositiveInt(value: string | undefined, fallback: number, minimum: number, maximum: number): number {
+  if (typeof value !== "string" || value.length === 0) return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    return Number.NaN;
+  }
+  return parsed;
+}
+
+function parseIsoDate(value: string | undefined, fieldName: string): { value?: string; error?: string } {
+  if (typeof value !== "string" || value.length === 0) return {};
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) {
+    return { error: `${fieldName} must use YYYY-MM-DD format.` };
+  }
+
+  const [, yearText, monthText, dayText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    return { error: `${fieldName} must be a valid calendar date.` };
+  }
+
+  return { value };
+}
+
+function validateCrimeRecordsQuery(query: CrimeRecordsQuery): { ok: true; value: ValidatedCrimeRecordsQuery } | { ok: false; error: string } {
+  const page = parsePositiveInt(query.page, 1, 1, Number.MAX_SAFE_INTEGER);
+  if (!Number.isFinite(page)) {
+    return { ok: false, error: "page must be a positive integer." };
+  }
+
+  const pageSize = parsePositiveInt(query.pageSize, 25, 1, MAX_RECORD_PAGE_SIZE);
+  if (!Number.isFinite(pageSize)) {
+    return { ok: false, error: `pageSize must be a positive integer no greater than ${MAX_RECORD_PAGE_SIZE}.` };
+  }
+
+  const fromResult = parseIsoDate(query.from, "from");
+  if (fromResult.error) return { ok: false, error: fromResult.error };
+
+  const toResult = parseIsoDate(query.to, "to");
+  if (toResult.error) return { ok: false, error: toResult.error };
+
+  if (fromResult.value && toResult.value && fromResult.value > toResult.value) {
+    return { ok: false, error: "from must be less than or equal to to." };
+  }
+
+  const borough = typeof query.borough === "string" && query.borough.trim().length > 0 ? query.borough.trim().toUpperCase() : undefined;
+  const offenseCategory =
+    typeof query.offenseCategory === "string" && query.offenseCategory.trim().length > 0
+      ? query.offenseCategory.trim().toUpperCase()
+      : undefined;
+
+  let precinct: number | undefined;
+  if (typeof query.precinct === "string" && query.precinct.length > 0) {
+    const parsedPrecinct = Number(query.precinct);
+    if (!Number.isInteger(parsedPrecinct) || parsedPrecinct <= 0 || parsedPrecinct > 255) {
+      return { ok: false, error: "precinct must be a positive integer." };
+    }
+    precinct = parsedPrecinct;
+  }
+
+  const offset = (page - 1) * pageSize;
+
+  return {
+    ok: true,
+    value: {
+      page,
+      pageSize,
+      offset,
+      from: fromResult.value,
+      to: toResult.value,
+      borough,
+      offenseCategory,
+      precinct
+    }
+  };
+}
+
+function buildCrimeRecordsFilters(query: ValidatedCrimeRecordsQuery): { whereClause: string; params: Record<string, unknown> } {
+  const whereParts: string[] = [];
+  const params: Record<string, unknown> = {};
+
+  if (query.from) {
+    whereParts.push("complaint_start_date >= {from:Date}");
+    params.from = query.from;
+  }
+  if (query.to) {
+    whereParts.push("complaint_start_date <= {to:Date}");
+    params.to = query.to;
+  }
+  if (query.borough) {
+    whereParts.push("upper(borough) = {borough:String}");
+    params.borough = query.borough;
+  }
+  if (query.offenseCategory) {
+    whereParts.push("upper(offense_category) = {offenseCategory:String}");
+    params.offenseCategory = query.offenseCategory;
+  }
+  if (typeof query.precinct === "number") {
+    whereParts.push("precinct = {precinct:UInt16}");
+    params.precinct = query.precinct;
+  }
+
+  return {
+    whereClause: whereParts.length > 0 ? `WHERE ${whereParts.join(" AND ")}` : "",
+    params
+  };
+}
 
 function buildFilters(query: QueryRecord): { whereParts: string[]; params: Record<string, unknown> } {
   const whereParts: string[] = [];
@@ -79,6 +246,84 @@ const app = new Elysia()
       return {
         status: "error",
         database: "clickhouse",
+        message: error instanceof Error ? error.message : "Unknown ClickHouse error"
+      };
+    }
+  })
+  .get("/crime-records", async ({ query, set }) => {
+    const validation = validateCrimeRecordsQuery(query as CrimeRecordsQuery);
+    if (!validation.ok) {
+      set.status = 400;
+      return {
+        status: "error",
+        message: validation.error
+      };
+    }
+
+    const filters = buildCrimeRecordsFilters(validation.value);
+    const countSql = `
+      SELECT count() AS total
+      FROM raw_nypd_complaints
+      ${filters.whereClause}
+    `;
+    const recordsSql = `
+      SELECT
+        complaint_number,
+        complaint_start_date,
+        complaint_start_time,
+        complaint_end_date,
+        complaint_end_time,
+        offense_category,
+        borough,
+        precinct,
+        latitude,
+        longitude,
+        source_dataset
+      FROM raw_nypd_complaints
+      ${filters.whereClause}
+      ORDER BY complaint_start_date DESC, complaint_number DESC
+      LIMIT {limit:UInt64}
+      OFFSET {offset:UInt64}
+    `;
+
+    try {
+      const totalResult = await clickhouse.query({
+        query: countSql,
+        query_params: filters.params,
+        format: "JSONEachRow"
+      });
+      const totalRows = await totalResult.json<{ total: string }>();
+      const total = Number(totalRows[0]?.total ?? 0);
+
+      const recordsResult = await clickhouse.query({
+        query: recordsSql,
+        query_params: {
+          ...filters.params,
+          limit: validation.value.pageSize,
+          offset: validation.value.offset
+        },
+        format: "JSONEachRow"
+      });
+      const items = await recordsResult.json<CrimeRecordRow>();
+
+      return {
+        page: validation.value.page,
+        pageSize: validation.value.pageSize,
+        total,
+        totalPages: total === 0 ? 0 : Math.ceil(total / validation.value.pageSize),
+        filters: {
+          from: validation.value.from,
+          to: validation.value.to,
+          borough: validation.value.borough,
+          offenseCategory: validation.value.offenseCategory,
+          precinct: validation.value.precinct
+        },
+        items
+      } satisfies CrimeRecordsResponse;
+    } catch (error) {
+      set.status = 500;
+      return {
+        status: "error",
         message: error instanceof Error ? error.message : "Unknown ClickHouse error"
       };
     }
