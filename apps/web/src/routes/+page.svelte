@@ -2,6 +2,7 @@
   import { env } from "$env/dynamic/public";
   import CategoryChart from "$lib/components/CategoryChart.svelte";
   import CrimeMap from "$lib/components/CrimeMap.svelte";
+  import ForecastChart from "$lib/components/ForecastChart.svelte";
   import HourChart from "$lib/components/HourChart.svelte";
   import TimeSeriesChart from "$lib/components/TimeSeriesChart.svelte";
   import WeekdayChart from "$lib/components/WeekdayChart.svelte";
@@ -39,8 +40,13 @@
     "STATEN ISLAND"
   ];
 
-  let dateFrom = $state("");
-  let dateTo = $state("");
+  // Default to the current year so analytics, map and tables show a focused
+  // recent slice. Without this, with ~1.3M records over 27 months the map
+  // saturates and the daily timeseries becomes unreadable. Users can clear the
+  // filter to see the full range.
+  const todayIso = new Date().toISOString().slice(0, 10);
+  let dateFrom = $state(`${todayIso.slice(0, 4)}-01-01`);
+  let dateTo = $state(todayIso);
   let borough = $state("");
   let offenseCategory = $state("");
   let overviewStatus: "loading" | "ready" | "empty" | "error" = $state("loading");
@@ -53,6 +59,9 @@
   let coveredPeriod = $state("No data");
   let recentRecords = $state<CrimeRecord[]>([]);
   let overviewRequestId = 0;
+
+  let forecastMode = $state<"forecast" | "backtest">("forecast");
+  let forecastHorizon = $state(8);
 
   function buildCrimeRecordsUrl(): string {
     const url = new URL("/crime-records", apiBaseUrl);
@@ -217,7 +226,7 @@
         <a class="primary-link" href={buildCrimeRecordsUrl()} target="_blank" rel="noreferrer">
           View filtered records
         </a>
-        <button type="button" class="secondary-button" on:click={clearFilters}>
+        <button type="button" class="secondary-button" onclick={clearFilters}>
           Reset filters
         </button>
       </div>
@@ -340,6 +349,58 @@
             </table>
           </div>
         {/if}
+      </section>
+
+      <section class="analytics-panel" aria-label="Predictions">
+        <header class="section-header forecast-header">
+          <div>
+            <h2>Predictions</h2>
+            <p>
+              Weekly complaint forecast powered by Amazon Chronos-2. Backtest mode holds out the
+              last <strong>{forecastHorizon}</strong> known weeks, predicts them, and scores accuracy.
+            </p>
+          </div>
+          <div class="forecast-controls">
+            <div class="mode-toggle" role="tablist" aria-label="Forecast mode">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={forecastMode === "forecast"}
+                class:active={forecastMode === "forecast"}
+                onclick={() => (forecastMode = "forecast")}
+              >
+                Forecast
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={forecastMode === "backtest"}
+                class:active={forecastMode === "backtest"}
+                onclick={() => (forecastMode = "backtest")}
+              >
+                Backtest
+              </button>
+            </div>
+            <label class="horizon-select">
+              <span>Horizon</span>
+              <select bind:value={forecastHorizon}>
+                <option value={4}>4 weeks</option>
+                <option value={8}>8 weeks</option>
+                <option value={12}>12 weeks</option>
+                <option value={16}>16 weeks</option>
+                <option value={26}>26 weeks (6 mo)</option>
+                <option value={52}>52 weeks (1 yr)</option>
+              </select>
+            </label>
+          </div>
+        </header>
+        <ForecastChart
+          mode={forecastMode}
+          borough={borough}
+          offense={offenseCategory}
+          horizon={forecastHorizon}
+          title={forecastMode === "backtest" ? "Backtest: forecast vs actual" : "Weekly complaint forecast"}
+        />
       </section>
 
       <section class="analytics-panel" aria-label="Analytics">
@@ -725,6 +786,63 @@
 
   .map-panel {
     min-height: 560px;
+  }
+
+  .forecast-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .forecast-controls {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .mode-toggle {
+    display: inline-flex;
+    border: 1px solid #cfd8df;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #fff;
+  }
+
+  .mode-toggle button {
+    border: 0;
+    background: transparent;
+    padding: 0.55rem 1rem;
+    cursor: pointer;
+    color: #4d5b65;
+    font-weight: 700;
+    font-size: 0.86rem;
+  }
+
+  .mode-toggle button.active {
+    background: #006d77;
+    color: #fff;
+  }
+
+  .horizon-select {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.86rem;
+    color: #4d5b65;
+    font-weight: 700;
+  }
+
+  .horizon-select select {
+    min-height: 2.4rem;
+    padding: 0.3rem 0.65rem;
+    border: 1px solid #cfd8df;
+    border-radius: 10px;
+    background: #fff;
+    color: #14212b;
+    font: inherit;
   }
 
   .charts-grid {

@@ -8,7 +8,41 @@ const SOCRATA_PAGE_SIZE = 50000;
 const SOCRATA_ENDPOINT =
 	process.env.NYPD_SOCRATA_ENDPOINT ??
 	"https://data.cityofnewyork.us/resource/qgea-i56i.json";
+// "Year-To-Date" dataset, refreshed weekly. Covers the current year only and is
+// much fresher than the validated historic dataset, which lags by ~5 months.
+const SOCRATA_YTD_ENDPOINT =
+	process.env.NYPD_SOCRATA_YTD_ENDPOINT ??
+	"https://data.cityofnewyork.us/resource/5uac-w243.json";
+// Lower bound for the historic dataset. Anything earlier is dropped at the API
+// level via $where so we don't waste bandwidth paginating through the full
+// 10M-row archive.
+const INGEST_HISTORIC_FROM = process.env.INGEST_HISTORIC_FROM ?? "2024-01-01";
 const SOCRATA_APP_TOKEN = process.env.SOCRATA_APP_TOKEN ?? "";
+
+type SocrataSource = {
+	endpoint: string;
+	dataset: string;
+	label: string;
+	where: string;
+};
+
+const HISTORIC_SOURCE: SocrataSource = {
+	endpoint: SOCRATA_ENDPOINT,
+	dataset: "qgea-i56i",
+	label: "historic",
+	where: `cmplnt_num IS NOT NULL AND cmplnt_fr_dt IS NOT NULL AND cmplnt_fr_dt >= '${INGEST_HISTORIC_FROM}T00:00:00'`
+};
+
+// YTD is keyed on the *report* date (rpt_dt), so it can contain complaints
+// whose actual occurrence (cmplnt_fr_dt) is much older — sometimes back to the
+// 70s. We apply the same date floor as the historic ingest to keep the time
+// series clean for analytics, the map, and Chronos.
+const YTD_SOURCE: SocrataSource = {
+	endpoint: SOCRATA_YTD_ENDPOINT,
+	dataset: "5uac-w243",
+	label: "year-to-date",
+	where: `cmplnt_num IS NOT NULL AND cmplnt_fr_dt IS NOT NULL AND cmplnt_fr_dt >= '${INGEST_HISTORIC_FROM}T00:00:00'`
+};
 
 const CLICKHOUSE_HOST = process.env.CLICKHOUSE_HOST ?? "clickhouse";
 const CLICKHOUSE_PORT = process.env.CLICKHOUSE_HTTP_PORT ?? "8123";
@@ -173,7 +207,16 @@ function cleanText(value: unknown): string | null {
 	return trimmed.length > 0 && trimmed.toLowerCase() !== "(null)" ? trimmed : null;
 }
 
-function socrataToCrimeRow(raw: SocrataRecord, summary: DataQualitySummary): CrimeRow | null {
+function makeSocrataMapper(source: SocrataSource) {
+	return (raw: SocrataRecord, summary: DataQualitySummary): CrimeRow | null =>
+		socrataToCrimeRow(raw, summary, source);
+}
+
+function socrataToCrimeRow(
+	raw: SocrataRecord,
+	summary: DataQualitySummary,
+	source: SocrataSource = HISTORIC_SOURCE
+): CrimeRow | null {
 	const complaintNumber = cleanText(raw.cmplnt_num);
 	if (!complaintNumber) return skipRow(summary, "missing_complaint_number");
 
@@ -207,8 +250,8 @@ function socrataToCrimeRow(raw: SocrataRecord, summary: DataQualitySummary): Cri
 		longitude: hasGeo ? lng : null,
 		h3_res_9: hasGeo ? h3UInt64(lat!, lng!, H3_PRIMARY) : null,
 		h3_res_7: hasGeo ? h3UInt64(lat!, lng!, H3_SECONDARY) : null,
-		source_dataset: "qgea-i56i",
-		source_record_url: `${SOCRATA_ENDPOINT}?cmplnt_num=${encodeURIComponent(complaintNumber)}`,
+		source_dataset: source.dataset,
+		source_record_url: `${source.endpoint}?cmplnt_num=${encodeURIComponent(complaintNumber)}`,
 		source_row_checksum: null
 	};
 }
@@ -294,14 +337,15 @@ async function loadSample(): Promise<{ rows: CrimeRow[]; summary: DataQualitySum
 	return mapValidRows(raw, enrichSampleRow);
 }
 
-async function fetchSocrataPage(pageLimit: number, offset: number): Promise<SocrataRecord[]> {
-	const url = new URL(SOCRATA_ENDPOINT);
+async function fetchSocrataPage(
+	source: SocrataSource,
+	pageLimit: number,
+	offset: number
+): Promise<SocrataRecord[]> {
+	const url = new URL(source.endpoint);
 	url.searchParams.set("$limit", String(pageLimit));
 	url.searchParams.set("$offset", String(offset));
-	url.searchParams.set(
-		"$where",
-		"cmplnt_num IS NOT NULL AND cmplnt_fr_dt IS NOT NULL"
-	);
+	url.searchParams.set("$where", source.where);
 	url.searchParams.set("$order", "cmplnt_fr_dt DESC");
 
 	const headers: Record<string, string> = {};
@@ -314,29 +358,33 @@ async function fetchSocrataPage(pageLimit: number, offset: number): Promise<Socr
 	return (await res.json()) as SocrataRecord[];
 }
 
-async function fetchSocrata(): Promise<{ rows: CrimeRow[]; summary: DataQualitySummary }> {
-	const target = LIMIT;
+async function fetchSocrata(
+	source: SocrataSource,
+	target: number
+): Promise<{ rows: CrimeRow[]; summary: DataQualitySummary }> {
 	const raw: SocrataRecord[] = [];
 	let offset = 0;
 	let page = 0;
 
-	console.log(`[ingest] fetching up to ${target} records from NYC Open Data...`);
+	console.log(
+		`[ingest] [${source.label}] fetching up to ${target} records from ${source.endpoint}`
+	);
 	while (raw.length < target) {
 		const pageLimit = Math.min(SOCRATA_PAGE_SIZE, target - raw.length);
 		page += 1;
-		console.log(`[ingest] page ${page}: limit=${pageLimit} offset=${offset}`);
-		const records = await fetchSocrataPage(pageLimit, offset);
+		console.log(`[ingest] [${source.label}] page ${page}: limit=${pageLimit} offset=${offset}`);
+		const records = await fetchSocrataPage(source, pageLimit, offset);
 		raw.push(...records);
 		if (records.length < pageLimit) {
-			console.log(`[ingest] reached end of dataset (${raw.length} records).`);
+			console.log(`[ingest] [${source.label}] reached end of dataset (${raw.length} records).`);
 			break;
 		}
 		offset += pageLimit;
 	}
 
-	console.log(`[ingest] received ${raw.length} raw records across ${page} page(s).`);
+	console.log(`[ingest] [${source.label}] received ${raw.length} raw records across ${page} page(s).`);
 
-	return mapValidRows(raw, socrataToCrimeRow);
+	return mapValidRows(raw, makeSocrataMapper(source));
 }
 
 async function deleteWhereDataset(dataset: string): Promise<void> {
@@ -376,42 +424,53 @@ async function main(): Promise<void> {
 		);
 	}
 
-	let rows: CrimeRow[];
-	let summary: DataQualitySummary;
-	let dataset: string;
 	if (MODE === "sample") {
-		({ rows, summary } = await loadSample());
-		dataset = "sample";
+		const { rows, summary } = await loadSample();
+		await ingestRows({ rows, summary, dataset: "sample" });
 	} else if (MODE === "socrata") {
-		({ rows, summary } = await fetchSocrata());
-		dataset = "qgea-i56i";
+		// We combine two datasets so the time series stays current: the validated
+		// "historic" archive (lags ~5 months) plus the YTD feed (refreshed weekly).
+		for (const source of [HISTORIC_SOURCE, YTD_SOURCE]) {
+			const { rows, summary } = await fetchSocrata(source, LIMIT);
+			await ingestRows({ rows, summary, dataset: source.dataset });
+		}
 	} else {
 		throw new Error(`Unknown INGEST_MODE '${MODE}'. Expected 'socrata' or 'sample'.`);
 	}
+
+	console.log("[ingest] done.");
+}
+
+async function ingestRows(input: {
+	rows: CrimeRow[];
+	summary: DataQualitySummary;
+	dataset: string;
+}): Promise<void> {
+	const { rows, summary, dataset } = input;
 
 	printQualitySummary(summary);
 
 	const withGeo = rows.filter((r) => r.h3_res_9 !== null).length;
 	console.log(
-		`[ingest] prepared ${rows.length} rows (${withGeo} geocoded, H3 r${H3_PRIMARY} + r${H3_SECONDARY}).`
+		`[ingest] [${dataset}] prepared ${rows.length} rows (${withGeo} geocoded, H3 r${H3_PRIMARY} + r${H3_SECONDARY}).`
 	);
 
+	console.log(`[ingest] [${dataset}] clearing previous rows...`);
+	await deleteWhereDataset(dataset);
+
 	if (rows.length === 0) {
-		console.log("[ingest] nothing to insert, exiting.");
+		console.log(`[ingest] [${dataset}] nothing to insert.`);
 		return;
 	}
 
-	console.log(`[ingest] clearing previous '${dataset}' rows...`);
-	await deleteWhereDataset(dataset);
-
-	console.log(`[ingest] inserting in batches of ${BATCH_SIZE}...`);
+	console.log(`[ingest] [${dataset}] inserting in batches of ${BATCH_SIZE}...`);
 	for (let offset = 0; offset < rows.length; offset += BATCH_SIZE) {
 		const chunk = rows.slice(offset, offset + BATCH_SIZE);
 		await insertBatch(chunk);
-		console.log(`[ingest] inserted ${Math.min(offset + chunk.length, rows.length)}/${rows.length}`);
+		console.log(
+			`[ingest] [${dataset}] inserted ${Math.min(offset + chunk.length, rows.length)}/${rows.length}`
+		);
 	}
-
-	console.log("[ingest] done.");
 }
 
 main().catch((err) => {

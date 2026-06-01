@@ -1,8 +1,8 @@
 # CrimeScope NYC
 
-CrimeScope NYC is a Docker-first web application for analyzing and visualizing NYPD crime data in New York City. The first version provides a clean TypeScript-first foundation with a SvelteKit frontend, ElysiaJS API, ClickHouse database, placeholder ingestion package, and placeholder Chronos prediction service.
+CrimeScope NYC is a Docker-first web application for analyzing and visualizing NYPD crime data in New York City. The stack ships a SvelteKit frontend, an ElysiaJS API, a ClickHouse database, a Socrata-based ingestion package, and a Chronos time-series forecasting service.
 
-The project already includes the main planned stack in Docker: Bun, SvelteKit, ElysiaJS, ClickHouse, MapLibre GL JS, H3, Vega-Lite, and a placeholder Chronos service. Future work will add the real crime-data ingestion pipeline, interactive maps, analytics views, and time-series prediction logic.
+The project bundles the full planned stack in Docker: Bun, SvelteKit, ElysiaJS, ClickHouse, MapLibre GL JS, H3, Vega-Lite, and a Python FastAPI service that wraps Amazon's Chronos-2 foundation model for weekly complaint forecasts.
 
 ## Stack
 
@@ -14,7 +14,7 @@ The project already includes the main planned stack in Docker: Bun, SvelteKit, E
 - MapLibre GL JS for future maps
 - H3 for future geospatial indexing
 - Vega-Lite for future charts
-- Python placeholder service for future Chronos prediction
+- Python FastAPI service wrapping Amazon Chronos-2 for weekly forecasts
 
 ## Prerequisites
 
@@ -113,7 +113,7 @@ docker compose ps
 - API ClickHouse check: http://localhost:3000/db-health
 - ClickHouse HTTP: http://localhost:8123
 - ClickHouse native TCP: localhost:9000
-- Chronos placeholder: http://localhost:8000
+- Chronos forecast service: http://localhost:8000 ([Swagger UI](http://localhost:8000/docs))
 
 ## Folder Structure
 
@@ -126,7 +126,7 @@ clickhouse/
 packages/
   ingest/     Bun/TypeScript ingestion scripts for NYC Open Data
 services/
-  chronos/    Placeholder Python service for future Chronos predictions
+  chronos/    Python FastAPI service wrapping Amazon Chronos-2 for weekly forecasts
 ```
 
 ## Service Responsibilities
@@ -137,16 +137,16 @@ services/
 | `api` | ElysiaJS HTTP API for health checks, records, H3 aggregation, and analytics | `3000` |
 | `clickhouse` | Persistent analytical database for NYPD complaint records | `8123`, `9000` |
 | `ingest` | Optional profile service that loads sample or Socrata data into ClickHouse | none |
-| `chronos` | Placeholder service for future time-series prediction work | `8000` |
+| `chronos` | Weekly complaint forecasts (Amazon Chronos-2 foundation model). See [services/chronos/README.md](services/chronos/README.md). | `8000` |
 
 ## Run The Ingestion
 
 The ingest service runs under the `ingest` Compose profile. It supports two modes (selected via the `INGEST_MODE` environment variable):
 
-- `socrata` (default) - fetches live NYPD complaint records from the [NYC Open Data Socrata API](https://dev.socrata.com/foundry/data.cityofnewyork.us/qgea-i56i) (`qgea-i56i` dataset), normalizes them, computes H3 cells, and inserts into ClickHouse.
+- `socrata` (default) - fetches live NYPD complaint records from the [NYC Open Data Socrata API](https://dev.socrata.com/foundry/data.cityofnewyork.us/qgea-i56i). The ingest combines two complementary datasets so the time series stays current: the validated **Historic** archive (`qgea-i56i`, filtered to `INGEST_HISTORIC_FROM` onward) and the **Year-To-Date** feed (`5uac-w243`, refreshed weekly). Both are normalized, geocoded with H3, and inserted into ClickHouse.
 - `sample` - reads the small bundled `packages/ingest/sample/sample.json` file. Useful for offline runs and quick smoke tests.
 
-Run the default Open Data ingestion (50 000 most recent records with coordinates):
+Run the default Open Data ingestion (defaults to 2 years of records, ~1.2M rows, takes 15-20 minutes):
 
 ```bash
 docker compose --profile ingest run --rm ingest
@@ -165,7 +165,11 @@ docker compose --profile ingest run --rm -e INGEST_MODE=sample ingest
 | Variable | Default | Purpose |
 |---|---|---|
 | `INGEST_MODE` | `socrata` | `socrata` (live API) or `sample` (bundled JSON) |
-| `INGEST_LIMIT` | `50000` | Max rows pulled per Socrata run (capped at 50 000 without an app token) |
+| `INGEST_LIMIT` | `1500000` | Max rows pulled per Socrata dataset (Historic + YTD each get their own budget). Capped at 50 000 per page; Socrata throttles aggressively without an app token. |
+| `INGEST_HISTORIC_FROM` | `2024-01-01` | Earliest `cmplnt_fr_dt` to pull from both datasets. The YTD feed publishes complaints reported in the current year, but the underlying incident date can be much older — this filter keeps the series clean. |
+| `NYPD_SOCRATA_YTD_ENDPOINT` | `https://data.cityofnewyork.us/resource/5uac-w243.json` | Year-To-Date NYPD dataset (refreshed weekly, current calendar year). |
+| `CHRONOS_MODEL` | `amazon/chronos-2` | HuggingFace model id used by the forecast service. Override at build time with `--build-arg CHRONOS_MODEL=…` to swap in `amazon/chronos-bolt-{tiny,small,base}` for lighter footprints. |
+| `CHRONOS_URL` | `http://chronos:8000` | Internal URL used by the SvelteKit BFF to reach the forecast service. |
 | `INGEST_BATCH_SIZE` | `1000` | Rows per `INSERT JSONEachRow` request |
 | `NYPD_SOCRATA_ENDPOINT` | `https://data.cityofnewyork.us/resource/qgea-i56i.json` | Override only to point at a different Socrata resource |
 | `SOCRATA_APP_TOKEN` | _(empty)_ | Optional Socrata app token to bypass the throttling for anonymous calls |
@@ -233,7 +237,7 @@ Cells are sorted by descending count and capped at 5 000 per response.
 
 ## API Contract
 
-The current JSON contracts for records, filters, map aggregations, charts, and future Chronos predictions are documented in [`docs/api-contract.md`](docs/api-contract.md).
+The current JSON contracts for records, filters, map aggregations, charts, and Chronos forecast payloads are documented in [`docs/api-contract.md`](docs/api-contract.md). Live Chronos endpoints are also browsable via Swagger at http://localhost:8000/docs.
 
 Shared TypeScript reference types live in `packages/contracts/src/index.ts`.
 

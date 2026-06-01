@@ -1,0 +1,4 @@
+fastapi>=0.115,<0.120
+uvicorn[standard]>=0.34,<0.40
+clickhouse-connect>=0.8,<1.0
+chronos-forecasting>=1.6
