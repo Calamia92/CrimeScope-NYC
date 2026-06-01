@@ -28,7 +28,7 @@ def r2(actual: Sequence[float], predicted: Sequence[float]) -> float:
     # When the held-out window is flat, ss_tot collapses to 0 and R² is
     # undefined. Surface NaN so the caller can decide how to render it.
     if ss_tot == 0:
-        return float("nan")
+        return 1.0 if ss_res == 0 else 0.0
     return 1.0 - ss_res / ss_tot
 
 

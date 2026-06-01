@@ -1,8 +1,21 @@
-import { error, json } from "@sveltejs/kit";
+import { json } from "@sveltejs/kit";
 import { env } from "$env/dynamic/private";
 import type { RequestHandler } from "./$types";
 
 const FORWARDED_PARAMS = ["borough", "offense", "horizon", "history_weeks"] as const;
+
+async function upstreamError(upstream: Response) {
+  const contentType = upstream.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    return json(await upstream.json(), { status: upstream.status });
+  }
+
+  const text = await upstream.text();
+  return json(
+    { status: "error", message: text || `Chronos returned ${upstream.status}` },
+    { status: upstream.status }
+  );
+}
 
 export const GET: RequestHandler = async ({ url, fetch }) => {
   const chronosUrl = (env.CHRONOS_URL ?? "http://chronos:8000").replace(/\/$/, "");
@@ -19,12 +32,17 @@ export const GET: RequestHandler = async ({ url, fetch }) => {
   try {
     upstream = await fetch(target);
   } catch (cause) {
-    error(502, `Chronos unreachable: ${cause instanceof Error ? cause.message : String(cause)}`);
+    return json(
+      {
+        status: "error",
+        message: `Chronos unreachable: ${cause instanceof Error ? cause.message : String(cause)}`
+      },
+      { status: 502 }
+    );
   }
 
   if (!upstream.ok) {
-    const text = await upstream.text();
-    error(upstream.status, text || `Chronos returned ${upstream.status}`);
+    return upstreamError(upstream);
   }
 
   return json(await upstream.json());

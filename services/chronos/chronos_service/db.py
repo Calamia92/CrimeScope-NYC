@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
+from threading import Lock
 from typing import Optional
 
 import clickhouse_connect
@@ -31,6 +32,7 @@ class ClickHouseRepository:
             username=settings.clickhouse_user,
             password=settings.clickhouse_password,
         )
+        self._query_lock = Lock()
 
     def close(self) -> None:
         self._client.close()
@@ -67,7 +69,11 @@ class ClickHouseRepository:
             ORDER BY week ASC
         """
 
-        result = self._client.query(sql, parameters=params)
+        # clickhouse-connect clients do not allow concurrent queries in the same
+        # session. FastAPI can serve forecast and backtest requests in parallel,
+        # so serialize access to the shared client.
+        with self._query_lock:
+            result = self._client.query(sql, parameters=params)
         points = [
             (row[0], int(row[1]), row[2])
             for row in result.result_rows
