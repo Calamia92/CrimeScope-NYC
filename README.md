@@ -111,6 +111,7 @@ docker compose ps
 - Web app: http://localhost:5173
 - API health: http://localhost:3000/health
 - API ClickHouse check: http://localhost:3000/db-health
+- API data health: http://localhost:3000/data-health
 - ClickHouse HTTP: http://localhost:8123
 - ClickHouse native TCP: localhost:9000
 - Chronos forecast service: http://localhost:8000 ([Swagger UI](http://localhost:8000/docs))
@@ -189,6 +190,24 @@ Ingestion validates the minimum fields needed by the app before inserting into C
 
 Each run prints a data-quality summary with source, imported, skipped, and warning counts. Invalid records do not stop the full ingestion job.
 
+Each dataset ingestion is also persisted in ClickHouse in `crimescope.ingestion_runs`. This gives the project a small observability layer for the Big Data pipeline: run status, duration, requested rows, source rows, imported rows, skipped rows, warning counts, and geocoded row counts.
+
+After a successful ingest, the job refreshes an analytics mart table, `crimescope.crime_weekly_analytics`. This table pre-aggregates complaint counts by week, borough, and offense category so dashboards and prediction services can read prepared analytical data instead of scanning the raw complaint table every time.
+
+The API exposes those checks at:
+
+```bash
+curl http://localhost:3000/data-health
+```
+
+The SvelteKit dashboard shows the same information in the **Data Health** panel: total records, date coverage, geocoding rate, H3 cell coverage, source breakdown, and latest ingestion runs.
+
+The weekly analytics mart can be inspected through:
+
+```bash
+curl "http://localhost:3000/analytics/weekly-mart?limit=20"
+```
+
 Inspect the inserted rows after the job completes:
 
 ```bash
@@ -247,7 +266,7 @@ GitHub Actions runs the lightweight Docker-first checks in `.github/workflows/ci
 
 ## ClickHouse Schema
 
-The first raw table lives in [`clickhouse/init/001_create_raw_nypd_complaints.sql`](clickhouse/init/001_create_raw_nypd_complaints.sql).
+The raw complaint table, ingestion observability table, and weekly analytics mart live in [`clickhouse/init/001_create_raw_nypd_complaints.sql`](clickhouse/init/001_create_raw_nypd_complaints.sql).
 
 On a fresh ClickHouse volume, Docker will execute the SQL automatically because the `clickhouse` service mounts `clickhouse/init` into `/docker-entrypoint-initdb.d`.
 
@@ -257,7 +276,7 @@ If the container is already running and you want to apply the schema manually, r
 docker compose exec clickhouse sh -c "clickhouse-client --user crimescope --password crimescope_password --multiquery < /docker-entrypoint-initdb.d/001_create_raw_nypd_complaints.sql"
 ```
 
-The table keeps room for later H3 and analytics work with nullable H3 fields, source metadata, and the raw complaint dimensions needed for filtering and aggregation.
+The raw table keeps room for later H3 and analytics work with nullable H3 fields, source metadata, and the raw complaint dimensions needed for filtering and aggregation. The `ingestion_runs` table tracks pipeline quality and makes it easier to prove when the dataset was loaded, how many rows were accepted, and how many warnings were produced. The `crime_weekly_analytics` mart separates raw storage from prepared analytical data for dashboards and Chronos-style time-series work.
 
 ## Environment
 

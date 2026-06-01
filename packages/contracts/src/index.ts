@@ -19,6 +19,60 @@ export type DbHealthResponse =
       message: string;
     };
 
+export type DataHealthRecords = {
+  total: number;
+  minDate: string | null;
+  maxDate: string | null;
+  geocoded: number;
+  geocodedPercent: number;
+  unknownOffense: number;
+  h3Res9Cells: number;
+};
+
+export type DataHealthAnalyticsMart = {
+  weeklyRows: number;
+  minWeek: string | null;
+  maxWeek: string | null;
+  latestRefresh: string | null;
+};
+
+export type DataHealthSource = {
+  dataset: string;
+  records: number;
+  minDate: string | null;
+  maxDate: string | null;
+  geocoded: number;
+  geocodedPercent: number;
+};
+
+export type IngestionRunSummary = {
+  runId: string;
+  startedAt: string;
+  finishedAt: string | null;
+  mode: string;
+  dataset: string;
+  status: string;
+  requestedLimit: number;
+  sourceRows: number;
+  importedRows: number;
+  skippedRows: number;
+  geocodedRows: number;
+  warningCount: number;
+  durationMs: number;
+  errorMessage: string | null;
+  skippedReasons: Record<string, number>;
+  warnings: Record<string, number>;
+};
+
+export type DataHealthResponse = {
+  status: "ok";
+  generatedAt: string;
+  records: DataHealthRecords;
+  analyticsMart: DataHealthAnalyticsMart;
+  sources: DataHealthSource[];
+  recentIngestionRuns: IngestionRunSummary[];
+};
+
 export type DateFilter = {
   from?: string;
   to?: string;
@@ -122,6 +176,23 @@ export type WeekdayBucket = {
 export type ByWeekdayResponse = {
   filters: AnalyticsFilters;
   buckets: WeekdayBucket[];
+};
+
+export type WeeklyAnalyticsMartRow = {
+  weekStart: string;
+  borough: string;
+  offenseCategory: string;
+  complaintCount: number;
+  geocodedCount: number;
+  h3Res9Cells: number;
+  refreshedAt: string;
+};
+
+export type WeeklyAnalyticsMartResponse = {
+  filters: CrimeRecordsFilters;
+  limit: number;
+  rowCount: number;
+  rows: WeeklyAnalyticsMartRow[];
 };
 
 export type PredictionRequest = DateFilter & {

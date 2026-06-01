@@ -106,6 +106,26 @@ type DataQualitySummary = {
 	warnings: Record<string, number>;
 };
 
+type IngestionRunRow = {
+	run_id: string;
+	started_at: string;
+	finished_at: string | null;
+	mode: string;
+	dataset: string;
+	status: "success" | "failed";
+	source_endpoint: string | null;
+	requested_limit: number;
+	source_rows: number;
+	imported_rows: number;
+	skipped_rows: number;
+	geocoded_rows: number;
+	warning_count: number;
+	skipped_reasons_json: string;
+	warnings_json: string;
+	error_message: string | null;
+	duration_ms: number;
+};
+
 function createQualitySummary(): DataQualitySummary {
 	return {
 		sourceRows: 0,
@@ -138,6 +158,95 @@ function clickhouseUrl(query: string): string {
 		query
 	});
 	return `http://${CLICKHOUSE_HOST}:${CLICKHOUSE_PORT}/?${params.toString()}`;
+}
+
+function toClickHouseDateTime(date: Date): string {
+	return date.toISOString().replace("T", " ").replace("Z", "");
+}
+
+function countWarnings(summary: DataQualitySummary): number {
+	return Object.values(summary.warnings).reduce((total, count) => total + count, 0);
+}
+
+async function postClickHouse(query: string, body?: string): Promise<void> {
+	const res = await fetch(clickhouseUrl(query), {
+		method: "POST",
+		headers: body ? { "Content-Type": "application/json" } : undefined,
+		body
+	});
+	if (!res.ok) {
+		const txt = await res.text();
+		throw new Error(`ClickHouse query failed: ${res.status} ${txt}`);
+	}
+}
+
+async function ensureIngestionRunsTable(): Promise<void> {
+	const query = `
+		CREATE TABLE IF NOT EXISTS ${CLICKHOUSE_DATABASE}.ingestion_runs
+		(
+			run_id UUID,
+			started_at DateTime64(3, 'UTC'),
+			finished_at Nullable(DateTime64(3, 'UTC')),
+			mode LowCardinality(String),
+			dataset LowCardinality(String),
+			status LowCardinality(String),
+			source_endpoint Nullable(String),
+			requested_limit UInt64,
+			source_rows UInt64,
+			imported_rows UInt64,
+			skipped_rows UInt64,
+			geocoded_rows UInt64,
+			warning_count UInt64,
+			skipped_reasons_json String,
+			warnings_json String,
+			error_message Nullable(String),
+			duration_ms UInt64
+		)
+		ENGINE = MergeTree
+		PARTITION BY toYYYYMM(started_at)
+		ORDER BY (started_at, dataset, run_id)
+		SETTINGS index_granularity = 8192
+	`;
+	await postClickHouse(query);
+}
+
+async function ensureAnalyticsMartTable(): Promise<void> {
+	const query = `
+		CREATE TABLE IF NOT EXISTS ${CLICKHOUSE_DATABASE}.crime_weekly_analytics
+		(
+			week_start Date,
+			borough LowCardinality(String),
+			offense_category LowCardinality(String),
+			complaint_count UInt64,
+			geocoded_count UInt64,
+			h3_res_9_cells UInt64,
+			refreshed_at DateTime64(3, 'UTC') DEFAULT now64(3)
+		)
+		ENGINE = MergeTree
+		PARTITION BY toYYYYMM(week_start)
+		ORDER BY (week_start, borough, offense_category)
+		SETTINGS index_granularity = 8192
+	`;
+	await postClickHouse(query);
+}
+
+async function refreshWeeklyAnalyticsMart(): Promise<void> {
+	console.log("[ingest] refreshing weekly analytics mart...");
+	await postClickHouse(`TRUNCATE TABLE ${CLICKHOUSE_DATABASE}.crime_weekly_analytics`);
+	await postClickHouse(`
+		INSERT INTO ${CLICKHOUSE_DATABASE}.crime_weekly_analytics
+		SELECT
+			toStartOfWeek(complaint_start_date, 1) AS week_start,
+			ifNull(borough, 'UNKNOWN') AS borough,
+			offense_category,
+			count() AS complaint_count,
+			countIf(latitude IS NOT NULL AND longitude IS NOT NULL) AS geocoded_count,
+			uniqExactIf(h3_res_9, h3_res_9 IS NOT NULL) AS h3_res_9_cells,
+			now64(3) AS refreshed_at
+		FROM ${CLICKHOUSE_DATABASE}.raw_nypd_complaints
+		GROUP BY week_start, borough, offense_category
+	`);
+	console.log("[ingest] weekly analytics mart refreshed.");
 }
 
 // h3-js exposes cells as 15-char hex strings; ClickHouse stores them as UInt64.
@@ -389,11 +498,7 @@ async function fetchSocrata(
 
 async function deleteWhereDataset(dataset: string): Promise<void> {
 	const query = `ALTER TABLE ${CLICKHOUSE_DATABASE}.raw_nypd_complaints DELETE WHERE source_dataset = '${dataset.replace(/'/g, "''")}' SETTINGS mutations_sync = 1`;
-	const res = await fetch(clickhouseUrl(query), { method: "POST" });
-	if (!res.ok) {
-		const txt = await res.text();
-		throw new Error(`Failed to clear previous '${dataset}' rows: ${res.status} ${txt}`);
-	}
+	await postClickHouse(query);
 }
 
 async function insertBatch(rows: CrimeRow[]): Promise<void> {
@@ -410,6 +515,11 @@ async function insertBatch(rows: CrimeRow[]): Promise<void> {
 	}
 }
 
+async function insertIngestionRun(run: IngestionRunRow): Promise<void> {
+	const query = `INSERT INTO ${CLICKHOUSE_DATABASE}.ingestion_runs FORMAT JSONEachRow`;
+	await postClickHouse(query, JSON.stringify(run));
+}
+
 async function main(): Promise<void> {
 	console.log(
 		`[ingest] mode=${MODE} target=${CLICKHOUSE_HOST}:${CLICKHOUSE_PORT}/${CLICKHOUSE_DATABASE}`
@@ -424,21 +534,92 @@ async function main(): Promise<void> {
 		);
 	}
 
+	await ensureIngestionRunsTable();
+	await ensureAnalyticsMartTable();
+
 	if (MODE === "sample") {
-		const { rows, summary } = await loadSample();
-		await ingestRows({ rows, summary, dataset: "sample" });
+		await ingestDataset({
+			dataset: "sample",
+			sourceEndpoint: null,
+			load: loadSample
+		});
 	} else if (MODE === "socrata") {
 		// We combine two datasets so the time series stays current: the validated
 		// "historic" archive (lags ~5 months) plus the YTD feed (refreshed weekly).
 		for (const source of [HISTORIC_SOURCE, YTD_SOURCE]) {
-			const { rows, summary } = await fetchSocrata(source, LIMIT);
-			await ingestRows({ rows, summary, dataset: source.dataset });
+			await ingestDataset({
+				dataset: source.dataset,
+				sourceEndpoint: source.endpoint,
+				load: () => fetchSocrata(source, LIMIT)
+			});
 		}
 	} else {
 		throw new Error(`Unknown INGEST_MODE '${MODE}'. Expected 'socrata' or 'sample'.`);
 	}
 
+	await refreshWeeklyAnalyticsMart();
 	console.log("[ingest] done.");
+}
+
+async function ingestDataset(input: {
+	dataset: string;
+	sourceEndpoint: string | null;
+	load: () => Promise<{ rows: CrimeRow[]; summary: DataQualitySummary }>;
+}): Promise<void> {
+	const startedAt = new Date();
+	const runId = crypto.randomUUID();
+	let rows: CrimeRow[] = [];
+	let summary = createQualitySummary();
+
+	try {
+		const loaded = await input.load();
+		rows = loaded.rows;
+		summary = loaded.summary;
+		await ingestRows({ rows, summary, dataset: input.dataset });
+
+		const finishedAt = new Date();
+		await insertIngestionRun({
+			run_id: runId,
+			started_at: toClickHouseDateTime(startedAt),
+			finished_at: toClickHouseDateTime(finishedAt),
+			mode: MODE,
+			dataset: input.dataset,
+			status: "success",
+			source_endpoint: input.sourceEndpoint,
+			requested_limit: MODE === "sample" ? summary.sourceRows : LIMIT,
+			source_rows: summary.sourceRows,
+			imported_rows: summary.importedRows,
+			skipped_rows: summary.skippedRows,
+			geocoded_rows: rows.filter((r) => r.h3_res_9 !== null).length,
+			warning_count: countWarnings(summary),
+			skipped_reasons_json: JSON.stringify(summary.skippedReasons),
+			warnings_json: JSON.stringify(summary.warnings),
+			error_message: null,
+			duration_ms: finishedAt.getTime() - startedAt.getTime()
+		});
+	} catch (error) {
+		const finishedAt = new Date();
+		await insertIngestionRun({
+			run_id: runId,
+			started_at: toClickHouseDateTime(startedAt),
+			finished_at: toClickHouseDateTime(finishedAt),
+			mode: MODE,
+			dataset: input.dataset,
+			status: "failed",
+			source_endpoint: input.sourceEndpoint,
+			requested_limit: MODE === "sample" ? summary.sourceRows : LIMIT,
+			source_rows: summary.sourceRows,
+			imported_rows: summary.importedRows,
+			skipped_rows: summary.skippedRows,
+			geocoded_rows: rows.filter((r) => r.h3_res_9 !== null).length,
+			warning_count: countWarnings(summary),
+			skipped_reasons_json: JSON.stringify(summary.skippedReasons),
+			warnings_json: JSON.stringify(summary.warnings),
+			error_message: error instanceof Error ? error.message : String(error),
+			duration_ms: finishedAt.getTime() - startedAt.getTime()
+		});
+		throw error;
+	}
 }
 
 async function ingestRows(input: {

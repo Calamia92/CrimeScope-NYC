@@ -34,6 +34,99 @@ const MAX_CATEGORY_LIMIT = 100;
 type H3AggregationRow = { cell: string; count: string };
 type ByDateRow = { bucket: string; count: string };
 type ByCategoryRow = { key: string; count: string };
+type DataHealthOverviewRow = {
+  total_records: string;
+  min_date: string | null;
+  max_date: string | null;
+  geocoded_records: string;
+  unknown_offense_records: string;
+  h3_res_9_cells: string;
+};
+type DataHealthSourceRow = {
+  source_dataset: string;
+  records: string;
+  min_date: string | null;
+  max_date: string | null;
+  geocoded_records: string;
+};
+type AnalyticsMartHealthRow = {
+  weekly_rows: string;
+  min_week: string | null;
+  max_week: string | null;
+  latest_refresh: string | null;
+};
+type IngestionRunResultRow = {
+  run_id: string;
+  started_at: string;
+  finished_at: string | null;
+  mode: string;
+  dataset: string;
+  status: string;
+  requested_limit: string;
+  source_rows: string;
+  imported_rows: string;
+  skipped_rows: string;
+  geocoded_rows: string;
+  warning_count: string;
+  duration_ms: string;
+  error_message: string | null;
+  skipped_reasons_json: string;
+  warnings_json: string;
+};
+type DataHealthResponse = {
+  status: "ok";
+  generatedAt: string;
+  records: {
+    total: number;
+    minDate: string | null;
+    maxDate: string | null;
+    geocoded: number;
+    geocodedPercent: number;
+    unknownOffense: number;
+    h3Res9Cells: number;
+  };
+  analyticsMart: {
+    weeklyRows: number;
+    minWeek: string | null;
+    maxWeek: string | null;
+    latestRefresh: string | null;
+  };
+  sources: Array<{
+    dataset: string;
+    records: number;
+    minDate: string | null;
+    maxDate: string | null;
+    geocoded: number;
+    geocodedPercent: number;
+  }>;
+  recentIngestionRuns: Array<{
+    runId: string;
+    startedAt: string;
+    finishedAt: string | null;
+    mode: string;
+    dataset: string;
+    status: string;
+    requestedLimit: number;
+    sourceRows: number;
+    importedRows: number;
+    skippedRows: number;
+    geocodedRows: number;
+    warningCount: number;
+    durationMs: number;
+    errorMessage: string | null;
+    skippedReasons: Record<string, number>;
+    warnings: Record<string, number>;
+  }>;
+};
+type WeeklyAnalyticsMartRow = {
+  week_start: string;
+  borough: string;
+  offense_category: string;
+  complaint_count: string;
+  geocoded_count: string;
+  h3_res_9_cells: string;
+  refreshed_at: string;
+};
 type CrimeRecordRow = {
   complaint_number: string;
   complaint_start_date: string;
@@ -86,6 +179,8 @@ type ValidatedCrimeRecordsQuery = {
 };
 
 const MAX_RECORD_PAGE_SIZE = 100;
+const DEFAULT_WEEKLY_MART_LIMIT = 500;
+const MAX_WEEKLY_MART_LIMIT = 5000;
 
 function parsePositiveInt(value: string | undefined, fallback: number, minimum: number, maximum: number): number {
   if (typeof value !== "string" || value.length === 0) return fallback;
@@ -228,6 +323,140 @@ function buildFilters(query: QueryRecord): { whereParts: string[]; params: Recor
   return { whereParts, params };
 }
 
+function toNumber(value: string | number | null | undefined): number {
+  if (value == null) return 0;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function percent(part: number, total: number): number {
+  if (total <= 0) return 0;
+  if (part >= total) return 100;
+  return Math.floor((part / total) * 10000) / 100;
+}
+
+function parseJsonRecord(value: string): Record<string, number> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).map(([key, count]) => [key, toNumber(count as string | number)])
+    );
+  } catch {
+    return {};
+  }
+}
+
+async function loadRecentIngestionRuns(): Promise<DataHealthResponse["recentIngestionRuns"]> {
+  try {
+    const result = await clickhouse.query({
+      query: `
+        SELECT
+          toString(run_id) AS run_id,
+          toString(started_at) AS started_at,
+          if(isNull(finished_at), NULL, toString(finished_at)) AS finished_at,
+          mode,
+          dataset,
+          status,
+          toString(requested_limit) AS requested_limit,
+          toString(source_rows) AS source_rows,
+          toString(imported_rows) AS imported_rows,
+          toString(skipped_rows) AS skipped_rows,
+          toString(geocoded_rows) AS geocoded_rows,
+          toString(warning_count) AS warning_count,
+          toString(duration_ms) AS duration_ms,
+          error_message,
+          skipped_reasons_json,
+          warnings_json
+        FROM ingestion_runs
+        ORDER BY started_at DESC
+        LIMIT 5
+      `,
+      format: "JSONEachRow"
+    });
+    const rows = await result.json<IngestionRunResultRow>();
+    return rows.map((row) => ({
+      runId: row.run_id,
+      startedAt: row.started_at,
+      finishedAt: row.finished_at,
+      mode: row.mode,
+      dataset: row.dataset,
+      status: row.status,
+      requestedLimit: toNumber(row.requested_limit),
+      sourceRows: toNumber(row.source_rows),
+      importedRows: toNumber(row.imported_rows),
+      skippedRows: toNumber(row.skipped_rows),
+      geocodedRows: toNumber(row.geocoded_rows),
+      warningCount: toNumber(row.warning_count),
+      durationMs: toNumber(row.duration_ms),
+      errorMessage: row.error_message,
+      skippedReasons: parseJsonRecord(row.skipped_reasons_json),
+      warnings: parseJsonRecord(row.warnings_json)
+    }));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("UNKNOWN_TABLE") || message.includes("doesn't exist")) return [];
+    throw error;
+  }
+}
+
+async function loadAnalyticsMartHealth(): Promise<DataHealthResponse["analyticsMart"]> {
+  try {
+    const result = await clickhouse.query({
+      query: `
+        SELECT
+          toString(count()) AS weekly_rows,
+          toString(min(week_start)) AS min_week,
+          toString(max(week_start)) AS max_week,
+          toString(max(refreshed_at)) AS latest_refresh
+        FROM crime_weekly_analytics
+      `,
+      format: "JSONEachRow"
+    });
+    const rows = await result.json<AnalyticsMartHealthRow>();
+    const row = rows[0];
+    return {
+      weeklyRows: toNumber(row?.weekly_rows),
+      minWeek: row?.min_week ?? null,
+      maxWeek: row?.max_week ?? null,
+      latestRefresh: row?.latest_refresh ?? null
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("UNKNOWN_TABLE") || message.includes("doesn't exist")) {
+      return { weeklyRows: 0, minWeek: null, maxWeek: null, latestRefresh: null };
+    }
+    throw error;
+  }
+}
+
+function buildWeeklyMartFilters(query: QueryRecord): { whereClause: string; params: Record<string, unknown> } {
+  const whereParts: string[] = [];
+  const params: Record<string, unknown> = {};
+
+  if (typeof query.from === "string" && query.from.length > 0) {
+    whereParts.push("week_start >= {from:Date}");
+    params.from = query.from;
+  }
+  if (typeof query.to === "string" && query.to.length > 0) {
+    whereParts.push("week_start <= {to:Date}");
+    params.to = query.to;
+  }
+  if (typeof query.borough === "string" && query.borough.length > 0) {
+    whereParts.push("borough = {borough:String}");
+    params.borough = query.borough.toUpperCase();
+  }
+  if (typeof query.offenseCategory === "string" && query.offenseCategory.length > 0) {
+    whereParts.push("offense_category = {offenseCategory:String}");
+    params.offenseCategory = query.offenseCategory.toUpperCase();
+  }
+
+  return {
+    whereClause: whereParts.length > 0 ? `WHERE ${whereParts.join(" AND ")}` : "",
+    params
+  };
+}
+
 const app = new Elysia()
   .use(cors())
   .get("/health", () => ({ status: "ok" }))
@@ -248,6 +477,137 @@ const app = new Elysia()
         database: "clickhouse",
         message: error instanceof Error ? error.message : "Unknown ClickHouse error"
       };
+    }
+  })
+  .get("/data-health", async ({ set }) => {
+    try {
+      const overviewResult = await clickhouse.query({
+        query: `
+          SELECT
+            toString(count()) AS total_records,
+            toString(min(complaint_start_date)) AS min_date,
+            toString(max(complaint_start_date)) AS max_date,
+            toString(countIf(latitude IS NOT NULL AND longitude IS NOT NULL)) AS geocoded_records,
+            toString(countIf(offense_category = 'UNKNOWN')) AS unknown_offense_records,
+            toString(uniqExactIf(h3_res_9, h3_res_9 IS NOT NULL)) AS h3_res_9_cells
+          FROM raw_nypd_complaints
+        `,
+        format: "JSONEachRow"
+      });
+      const overviewRows = await overviewResult.json<DataHealthOverviewRow>();
+      const overview = overviewRows[0] ?? {
+        total_records: "0",
+        min_date: null,
+        max_date: null,
+        geocoded_records: "0",
+        unknown_offense_records: "0",
+        h3_res_9_cells: "0"
+      };
+
+      const sourcesResult = await clickhouse.query({
+        query: `
+          SELECT
+            source_dataset,
+            toString(count()) AS records,
+            toString(min(complaint_start_date)) AS min_date,
+            toString(max(complaint_start_date)) AS max_date,
+            toString(countIf(latitude IS NOT NULL AND longitude IS NOT NULL)) AS geocoded_records
+          FROM raw_nypd_complaints
+          GROUP BY source_dataset
+          ORDER BY count() DESC
+        `,
+        format: "JSONEachRow"
+      });
+      const sourceRows = await sourcesResult.json<DataHealthSourceRow>();
+      const recentIngestionRuns = await loadRecentIngestionRuns();
+      const analyticsMart = await loadAnalyticsMartHealth();
+
+      const total = toNumber(overview.total_records);
+      const geocoded = toNumber(overview.geocoded_records);
+
+      return {
+        status: "ok",
+        generatedAt: new Date().toISOString(),
+        records: {
+          total,
+          minDate: overview.min_date,
+          maxDate: overview.max_date,
+          geocoded,
+          geocodedPercent: percent(geocoded, total),
+          unknownOffense: toNumber(overview.unknown_offense_records),
+          h3Res9Cells: toNumber(overview.h3_res_9_cells)
+        },
+        analyticsMart,
+        sources: sourceRows.map((row) => {
+          const records = toNumber(row.records);
+          const sourceGeocoded = toNumber(row.geocoded_records);
+          return {
+            dataset: row.source_dataset,
+            records,
+            minDate: row.min_date,
+            maxDate: row.max_date,
+            geocoded: sourceGeocoded,
+            geocodedPercent: percent(sourceGeocoded, records)
+          };
+        }),
+        recentIngestionRuns
+      } satisfies DataHealthResponse;
+    } catch (error) {
+      set.status = 500;
+      return {
+        status: "error",
+        message: error instanceof Error ? error.message : "Unknown ClickHouse error"
+      };
+    }
+  })
+  .get("/analytics/weekly-mart", async ({ query, set }) => {
+    let limit = Number(query.limit ?? DEFAULT_WEEKLY_MART_LIMIT);
+    if (!Number.isFinite(limit) || limit <= 0) limit = DEFAULT_WEEKLY_MART_LIMIT;
+    limit = Math.min(Math.floor(limit), MAX_WEEKLY_MART_LIMIT);
+
+    const { whereClause, params } = buildWeeklyMartFilters(query as QueryRecord);
+
+    try {
+      const result = await clickhouse.query({
+        query: `
+          SELECT
+            toString(week_start) AS week_start,
+            borough,
+            offense_category,
+            toString(complaint_count) AS complaint_count,
+            toString(geocoded_count) AS geocoded_count,
+            toString(h3_res_9_cells) AS h3_res_9_cells,
+            toString(refreshed_at) AS refreshed_at
+          FROM crime_weekly_analytics
+          ${whereClause}
+          ORDER BY week_start ASC, complaint_count DESC
+          LIMIT {limit:UInt64}
+        `,
+        query_params: {
+          ...params,
+          limit
+        },
+        format: "JSONEachRow"
+      });
+      const rows = await result.json<WeeklyAnalyticsMartRow>();
+
+      return {
+        filters: params,
+        limit,
+        rowCount: rows.length,
+        rows: rows.map((row) => ({
+          weekStart: row.week_start,
+          borough: row.borough,
+          offenseCategory: row.offense_category,
+          complaintCount: toNumber(row.complaint_count),
+          geocodedCount: toNumber(row.geocoded_count),
+          h3Res9Cells: toNumber(row.h3_res_9_cells),
+          refreshedAt: row.refreshed_at
+        }))
+      };
+    } catch (error) {
+      set.status = 500;
+      return { error: error instanceof Error ? error.message : "Unknown ClickHouse error" };
     }
   })
   .get("/crime-records", async ({ query, set }) => {

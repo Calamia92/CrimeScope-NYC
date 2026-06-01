@@ -29,6 +29,40 @@
     buckets: Array<{ bucket: string; count: number }>;
   };
 
+  type DataHealthResponse = {
+    records: {
+      total: number;
+      minDate: string | null;
+      maxDate: string | null;
+      geocoded: number;
+      geocodedPercent: number;
+      unknownOffense: number;
+      h3Res9Cells: number;
+    };
+    analyticsMart: {
+      weeklyRows: number;
+      minWeek: string | null;
+      maxWeek: string | null;
+      latestRefresh: string | null;
+    };
+    sources: Array<{
+      dataset: string;
+      records: number;
+      minDate: string | null;
+      maxDate: string | null;
+      geocodedPercent: number;
+    }>;
+    recentIngestionRuns: Array<{
+      startedAt: string;
+      dataset: string;
+      status: string;
+      importedRows: number;
+      skippedRows: number;
+      warningCount: number;
+      durationMs: number;
+    }>;
+  };
+
   const apiBaseUrl = env.PUBLIC_API_BASE_URL ?? "http://localhost:3000";
 
   const boroughOptions = [
@@ -59,6 +93,9 @@
   let coveredPeriod = $state("No data");
   let recentRecords = $state<CrimeRecord[]>([]);
   let overviewRequestId = 0;
+  let dataHealthStatus: "loading" | "ready" | "error" = $state("loading");
+  let dataHealthError = $state("");
+  let dataHealth = $state<DataHealthResponse | null>(null);
 
   let forecastMode = $state<"forecast" | "backtest">("forecast");
   let forecastHorizon = $state(8);
@@ -99,6 +136,33 @@
     const first = buckets[0]?.bucket.slice(0, 10);
     const last = buckets[buckets.length - 1]?.bucket.slice(0, 10);
     return first === last ? first : `${first} to ${last}`;
+  }
+
+  function formatDatasetPeriod(minDate: string | null, maxDate: string | null): string {
+    if (!minDate || !maxDate) return "No data";
+    return minDate === maxDate ? minDate : `${minDate} to ${maxDate}`;
+  }
+
+  function formatDuration(ms: number): string {
+    if (ms < 1000) return `${ms} ms`;
+    const seconds = Math.round(ms / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return remainingSeconds === 0 ? `${minutes}m` : `${minutes}m ${remainingSeconds}s`;
+  }
+
+  async function loadDataHealth(): Promise<void> {
+    dataHealthStatus = "loading";
+    dataHealthError = "";
+
+    try {
+      dataHealth = await fetchJson<DataHealthResponse>(new URL("/data-health", apiBaseUrl).toString());
+      dataHealthStatus = "ready";
+    } catch (error) {
+      dataHealthStatus = "error";
+      dataHealthError = error instanceof Error ? error.message : String(error);
+    }
   }
 
   async function loadOverview(filterSignature: string): Promise<void> {
@@ -149,6 +213,10 @@
   $effect(() => {
     const signature = buildAnalyticsFilterQuery();
     void loadOverview(signature);
+  });
+
+  $effect(() => {
+    void loadDataHealth();
   });
 </script>
 
@@ -297,6 +365,103 @@
           <span>Elysia API</span>
           <span>SvelteKit Dashboard</span>
         </div>
+      </section>
+
+      <section class="data-health-panel" aria-label="Data health">
+        <header class="section-header records-header">
+          <div>
+            <h2>Data Health</h2>
+            <p>Dataset observability from ClickHouse ingestion runs and quality counters.</p>
+          </div>
+          <a href={`${apiBaseUrl}/data-health`} target="_blank" rel="noreferrer">Open data-health API</a>
+        </header>
+
+        {#if dataHealthStatus === "loading"}
+          <div class="table-state">Loading data health...</div>
+        {:else if dataHealthStatus === "error"}
+          <div class="empty-banner error-banner">
+            <strong>Data health unavailable</strong>
+            <span>{dataHealthError}</span>
+          </div>
+        {:else if dataHealth}
+          <div class="health-grid">
+            <article class="health-card">
+              <span>Total dataset</span>
+              <strong>{dataHealth.records.total.toLocaleString()}</strong>
+              <small>{formatDatasetPeriod(dataHealth.records.minDate, dataHealth.records.maxDate)}</small>
+            </article>
+            <article class="health-card">
+              <span>Geocoded rows</span>
+              <strong>{dataHealth.records.geocodedPercent.toFixed(2)}%</strong>
+              <small>{dataHealth.records.geocoded.toLocaleString()} rows with coordinates</small>
+            </article>
+            <article class="health-card">
+              <span>H3 resolution 9</span>
+              <strong>{dataHealth.records.h3Res9Cells.toLocaleString()}</strong>
+              <small>unique hex cells for map aggregation</small>
+            </article>
+            <article class="health-card">
+              <span>Weekly analytics mart</span>
+              <strong>{dataHealth.analyticsMart.weeklyRows.toLocaleString()}</strong>
+              <small>{formatDatasetPeriod(dataHealth.analyticsMart.minWeek, dataHealth.analyticsMart.maxWeek)}</small>
+            </article>
+            <article class="health-card">
+              <span>Unknown offense</span>
+              <strong>{dataHealth.records.unknownOffense.toLocaleString()}</strong>
+              <small>imported with quality warning</small>
+            </article>
+          </div>
+
+          <div class="health-lists">
+            <div class="health-list">
+              <h3>Sources</h3>
+              {#each dataHealth.sources as source}
+                <div class="health-row">
+                  <div>
+                    <strong>{source.dataset}</strong>
+                    <span>{formatDatasetPeriod(source.minDate, source.maxDate)}</span>
+                  </div>
+                  <div>
+                    <strong>{source.records.toLocaleString()}</strong>
+                    <span>{source.geocodedPercent.toFixed(2)}% geocoded</span>
+                  </div>
+                </div>
+              {/each}
+            </div>
+
+            <div class="health-list">
+              <h3>Latest ingestion runs</h3>
+              {#if dataHealth.recentIngestionRuns.length === 0}
+                <div class="health-row">
+                  <div>
+                    <strong>No tracked run yet</strong>
+                    <span>Run the ingest service once to populate this table.</span>
+                  </div>
+                </div>
+              {:else}
+                {#each dataHealth.recentIngestionRuns as run}
+                  <div class="health-row">
+                    <div>
+                      <strong>{run.dataset} · {run.status}</strong>
+                      <span>{run.startedAt}</span>
+                    </div>
+                    <div>
+                      <strong>{run.importedRows.toLocaleString()}</strong>
+                      <span>{run.warningCount} warnings · {formatDuration(run.durationMs)}</span>
+                    </div>
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          </div>
+
+          <div class="mart-strip">
+            <span>Raw complaints</span>
+            <span>Quality tracking</span>
+            <span>Weekly analytics mart</span>
+            <span>Dashboard + Chronos ready</span>
+          </div>
+        {/if}
       </section>
 
       <section class="map-panel" aria-label="Map">
@@ -561,6 +726,7 @@
 
   .filters-panel,
   .overview-panel,
+  .data-health-panel,
   .map-panel,
   .records-panel,
   .analytics-panel {
@@ -777,6 +943,7 @@
   }
 
   .map-panel,
+  .data-health-panel,
   .records-panel,
   .analytics-panel {
     display: grid;
@@ -786,6 +953,112 @@
 
   .map-panel {
     min-height: 560px;
+  }
+
+  .data-health-panel {
+    display: grid;
+    gap: 1rem;
+    padding: 1.2rem;
+  }
+
+  .health-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0.85rem;
+  }
+
+  .health-card {
+    display: grid;
+    gap: 0.35rem;
+    min-height: 104px;
+    padding: 1rem;
+    border: 1px solid #d8e0e6;
+    border-radius: 8px;
+    background: #fff;
+  }
+
+  .health-card span,
+  .health-card small {
+    color: #60717d;
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .health-card strong {
+    align-self: center;
+    color: #006d77;
+    font-size: 1.35rem;
+    line-height: 1.1;
+    overflow-wrap: anywhere;
+  }
+
+  .health-lists {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+  }
+
+  .health-list {
+    display: grid;
+    align-content: start;
+    gap: 0.65rem;
+    padding: 1rem;
+    border: 1px solid #d8e0e6;
+    border-radius: 8px;
+    background: #fff;
+  }
+
+  .health-list h3 {
+    margin: 0;
+    font-size: 1rem;
+  }
+
+  .health-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding-top: 0.65rem;
+    border-top: 1px solid #eef1f4;
+  }
+
+  .health-row div {
+    display: grid;
+    gap: 0.2rem;
+  }
+
+  .health-row div:last-child {
+    text-align: right;
+  }
+
+  .health-row strong {
+    color: #14212b;
+    font-size: 0.9rem;
+  }
+
+  .health-row span {
+    color: #60717d;
+    font-size: 0.78rem;
+  }
+
+  .mart-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  .mart-strip span {
+    min-height: 2.2rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 0.55rem;
+    border-radius: 6px;
+    background: #f1f6ef;
+    color: #386641;
+    font-size: 0.78rem;
+    font-weight: 800;
+    text-align: center;
   }
 
   .forecast-header {
@@ -939,6 +1212,12 @@
     .kpi-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+
+    .health-grid,
+    .mart-strip,
+    .health-lists {
+      grid-template-columns: 1fr;
+    }
   }
 
   @media (max-width: 640px) {
@@ -957,8 +1236,16 @@
     }
 
     .kpi-grid,
+    .health-grid,
+    .mart-strip,
     .pipeline-strip {
       grid-template-columns: 1fr;
+    }
+
+    .health-row,
+    .health-row div:last-child {
+      display: grid;
+      text-align: left;
     }
 
     .records-header {

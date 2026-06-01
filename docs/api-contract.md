@@ -50,6 +50,103 @@ Failure:
 }
 ```
 
+### `GET /data-health`
+
+Returns dataset-level observability for the ClickHouse tables and latest ingestion runs.
+
+```json
+{
+  "status": "ok",
+  "generatedAt": "2026-06-01T12:00:00.000Z",
+  "records": {
+    "total": 1274387,
+    "minDate": "2024-01-01",
+    "maxDate": "2026-03-31",
+    "geocoded": 1274374,
+    "geocodedPercent": 99.99,
+    "unknownOffense": 23,
+    "h3Res9Cells": 18920
+  },
+  "analyticsMart": {
+    "weeklyRows": 2450,
+    "minWeek": "2024-01-01",
+    "maxWeek": "2026-03-30",
+    "latestRefresh": "2026-06-01 12:00:00.000"
+  },
+  "sources": [
+    {
+      "dataset": "qgea-i56i",
+      "records": 1141860,
+      "minDate": "2024-01-01",
+      "maxDate": "2025-12-31",
+      "geocoded": 1141847,
+      "geocodedPercent": 99.99
+    }
+  ],
+  "recentIngestionRuns": [
+    {
+      "runId": "018f1d9a-5f2f-4d54-a97a-71a5e7d45d01",
+      "startedAt": "2026-06-01 10:00:00.000",
+      "finishedAt": "2026-06-01 10:14:25.000",
+      "mode": "socrata",
+      "dataset": "qgea-i56i",
+      "status": "success",
+      "requestedLimit": 1500000,
+      "sourceRows": 1141860,
+      "importedRows": 1141860,
+      "skippedRows": 0,
+      "geocodedRows": 1141847,
+      "warningCount": 34,
+      "durationMs": 865000,
+      "errorMessage": null,
+      "skippedReasons": {},
+      "warnings": {
+        "missing_coordinates": 13,
+        "missing_offense_category": 21
+      }
+    }
+  ]
+}
+```
+
+## Analytics Mart
+
+### `GET /analytics/weekly-mart`
+
+Returns prepared weekly aggregates from `crime_weekly_analytics`, not from the raw complaint table.
+
+Query parameters:
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `from` / `to` | `YYYY-MM-DD` | none | Inclusive bounds on `week_start` |
+| `borough` | string | none | Exact borough match after uppercasing |
+| `offenseCategory` | string | none | Exact offense category match after uppercasing |
+| `limit` | positive integer | `500`, capped at `5000` | Max rows returned |
+
+Response:
+
+```json
+{
+  "filters": {
+    "borough": "MANHATTAN"
+  },
+  "limit": 500,
+  "rowCount": 1,
+  "rows": [
+    {
+      "weekStart": "2026-03-30",
+      "borough": "MANHATTAN",
+      "offenseCategory": "PETIT LARCENY",
+      "complaintCount": 42,
+      "geocodedCount": 42,
+      "h3Res9Cells": 31,
+      "refreshedAt": "2026-06-01 12:00:00.000"
+    }
+  ]
+}
+```
+
 ## Crime Records
 
 ### `GET /crime-records`
