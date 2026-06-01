@@ -74,13 +74,9 @@
     "STATEN ISLAND"
   ];
 
-  // Default to the current year so analytics, map and tables show a focused
-  // recent slice. Without this, with ~1.3M records over 27 months the map
-  // saturates and the daily timeseries becomes unreadable. Users can clear the
-  // filter to see the full range.
-  const todayIso = new Date().toISOString().slice(0, 10);
-  let dateFrom = $state(`${todayIso.slice(0, 4)}-01-01`);
-  let dateTo = $state(todayIso);
+  // Start unfiltered so the first screen always reflects the loaded ClickHouse dataset.
+  let dateFrom = $state("");
+  let dateTo = $state("");
   let borough = $state("");
   let offenseCategory = $state("");
   let overviewStatus: "loading" | "ready" | "empty" | "error" = $state("loading");

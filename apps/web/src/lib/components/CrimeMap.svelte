@@ -19,12 +19,12 @@
   // Step-function palette: visible thresholds match the legend below.
   const STOPS: Array<[number, string]> = [
     [1, "#ffeda0"],
-    [2, "#fed976"],
-    [5, "#feb24c"],
-    [10, "#fd8d3c"],
-    [15, "#fc4e2a"],
-    [20, "#e31a1c"],
-    [30, "#b10026"]
+    [25, "#fed976"],
+    [50, "#feb24c"],
+    [100, "#fd8d3c"],
+    [250, "#fc4e2a"],
+    [500, "#e31a1c"],
+    [1000, "#b10026"]
   ];
 
   let mapContainer: HTMLDivElement;
